@@ -540,8 +540,9 @@
              const end = `${dateStr}T${endTime}`;
              
              // 3. 建立 URL
-             const title = encodeURIComponent(`TBC主日服事: ${shift.role}`);
-             const details = encodeURIComponent(`服事項目: ${shift.role}\n堂數: ${shift.session}`);
+             // 修正：標題僅顯示角色名稱，說明欄位開頭改為「台中浸信會主日服事:」
+             const title = encodeURIComponent(`${shift.role}`);
+             const details = encodeURIComponent(`台中浸信會主日服事: ${shift.role}\n堂數: ${shift.session}`);
              
              const url = `https://www.google.com/calendar/render?action=TEMPLATE&text=${title}&dates=${start}/${end}&details=${details}`;
              
@@ -631,14 +632,16 @@
                           
                           {/* 右側按鈕區：改為 flex-col 或 flex-row */}
                           <div className="flex items-center gap-2">
-                              {/* 加入行事曆按鈕 */}
-                              <button onClick={() => addToGoogleCalendar(shift)} className="flex flex-col items-center justify-center gap-1 bg-white hover:bg-blue-50 text-blue-600 px-3 py-2 rounded-xl transition-all active:scale-95 border-2 border-blue-100 flex-shrink-0 shadow-sm w-[4.5rem]">
-                                <CalendarPlus size={18} /><span className="text-[10px] font-bold">加入</span>
-                              </button>
+                              {/* 加入行事曆按鈕 (僅在當季班表顯示) */}
+                              {seasonType === 'view' && (
+                                <button onClick={() => addToGoogleCalendar(shift)} className="flex flex-col items-center justify-center gap-1 bg-white hover:bg-blue-50 text-blue-600 px-3 py-2 rounded-xl transition-all active:scale-95 border-2 border-blue-100 flex-shrink-0 shadow-sm">
+                                    <CalendarPlus size={18} /><span className="text-[10px] font-bold">加入行事曆</span>
+                                </button>
+                              )}
 
                               {/* 原有的換班查詢按鈕 */}
-                              <button onClick={() => onRequestSwap({ date: shift.date, role: shift.role, session: shift.rawSession, owner: name })} className="flex flex-col items-center justify-center gap-1 bg-white hover:bg-emerald-50 text-emerald-600 px-3 py-2 rounded-xl transition-all active:scale-95 border-2 border-emerald-100 flex-shrink-0 shadow-sm w-[4.5rem]">
-                                <RefreshCw size={18} /><span className="text-[10px] font-bold">換班</span>
+                              <button onClick={() => onRequestSwap({ date: shift.date, role: shift.role, session: shift.rawSession, owner: name })} className="flex flex-col items-center justify-center gap-1 bg-white hover:bg-emerald-50 text-emerald-600 px-3 py-2 rounded-xl transition-all active:scale-95 border-2 border-emerald-100 flex-shrink-0 shadow-sm">
+                                <RefreshCw size={18} /><span className="text-[10px] font-bold">換班查詢</span>
                               </button>
                           </div>
                         </div>

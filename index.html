@@ -226,8 +226,13 @@
 
         // --- App Component ---
         function App() {
-          const [currentView, setCurrentView] = useState('login'); 
-          const [name, setName] = useState('');
+          // 修改：初始化 State 時直接讀取 localStorage，實現「秒登入」
+          // 這樣即使重新點開連結，也會因為有紀錄而直接跳過登入畫面
+          const savedUser = typeof window !== 'undefined' ? localStorage.getItem('tbc_user') : null;
+          
+          const [name, setName] = useState(savedUser || '');
+          const [currentView, setCurrentView] = useState(savedUser ? 'mySchedule' : 'login'); 
+          
           const [loginError, setLoginError] = useState('');
           const [swapRequest, setSwapRequest] = useState(null); 
           const [scheduleData, setScheduleData] = useState(DEFAULT_SCHEDULE);
@@ -287,6 +292,8 @@
             
             const userExists = peopleData.some(p => p.name === trimmedName);
             if (userExists || peopleData.length === 0) {
+                // 登入成功時，儲存姓名到 localStorage
+                localStorage.setItem('tbc_user', trimmedName);
                 setCurrentView('mySchedule');
                 setLoginError('');
             } else {
@@ -295,6 +302,8 @@
           };
 
           const handleLogout = () => {
+            // 登出時，移除 localStorage 的姓名
+            localStorage.removeItem('tbc_user');
             setName('');
             setLoginError('');
             setSwapRequest(null);
@@ -545,7 +554,7 @@
              // 這樣 Google 就會知道 "20240222T090000" 是台北時間，不會亂轉時區
              const url = `https://www.google.com/calendar/render?action=TEMPLATE&text=${title}&dates=${start}/${end}&details=${details}&ctz=Asia/Taipei`;
              
-             window.open(url, '_blank');
+             window.open(url, '_blank', 'noopener,noreferrer');
           };
 
           return (

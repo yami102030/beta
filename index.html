@@ -272,7 +272,6 @@
 
         // --- App Component ---
         function App() {
-          // 修改：使用新的 getLocalData 函式，同時讀取 localStorage 與 cookie
           const savedUser = getLocalData('tbc_user');
           
           const [name, setName] = useState(savedUser || '');
@@ -288,7 +287,8 @@
           const [syncStatus, setSyncStatus] = useState('');
           const [progress, setProgress] = useState(0);
           
-          const [seasonType, setSeasonType] = useState('view'); 
+          // 修改：如果是由「限時開啟」連結進入 (ENABLE_PRE_SCHEDULE 為 true)，預設顯示「預排表 (next)」，否則顯示「當季表 (view)」
+          const [seasonType, setSeasonType] = useState(ENABLE_PRE_SCHEDULE ? 'next' : 'view'); 
           const seasonLabels = useMemo(() => getSeasonLabels(), []);
 
           useEffect(() => {
@@ -348,7 +348,6 @@
             
             const userExists = peopleData.some(p => p.name === trimmedName);
             if (userExists || peopleData.length === 0) {
-                // 登入成功時，同時儲存到 localStorage 和 cookie
                 setLocalData('tbc_user', trimmedName);
                 setCurrentView('mySchedule');
                 setLoginError('');
@@ -358,7 +357,6 @@
           };
 
           const handleLogout = () => {
-            // 登出時，移除儲存資料
             removeLocalData('tbc_user');
             setName('');
             setLoginError('');

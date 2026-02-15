@@ -88,6 +88,52 @@
 
         const ENABLE_PRE_SCHEDULE = checkIsOpen();
 
+        // --- 儲存輔助函式 (針對手機版優化：同時使用 LocalStorage 與 Cookie) ---
+        const setLocalData = (key, value) => {
+            if (typeof window === 'undefined') return;
+            // 1. 嘗試寫入 LocalStorage
+            try {
+                localStorage.setItem(key, value);
+            } catch (e) {
+                console.warn('LocalStorage access denied');
+            }
+            // 2. 同時寫入 Cookie (作為備案，期限30天)
+            try {
+                const date = new Date();
+                date.setTime(date.getTime() + (30 * 24 * 60 * 60 * 1000)); 
+                document.cookie = `${key}=${encodeURIComponent(value)}; expires=${date.toUTCString()}; path=/`;
+            } catch (e) {}
+        };
+
+        const getLocalData = (key) => {
+            if (typeof window === 'undefined') return null;
+            let value = null;
+            
+            // 1. 優先讀取 LocalStorage
+            try {
+                value = localStorage.getItem(key);
+            } catch(e) {}
+            
+            // 2. 若沒讀到，嘗試讀取 Cookie
+            if (!value) {
+                try {
+                    const match = document.cookie.match(new RegExp('(^| )' + key + '=([^;]+)'));
+                    if (match) value = decodeURIComponent(match[2]);
+                } catch(e) {}
+            }
+            return value;
+        };
+
+        const removeLocalData = (key) => {
+            if (typeof window === 'undefined') return;
+            try {
+                localStorage.removeItem(key);
+            } catch(e) {}
+            try {
+                document.cookie = `${key}=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;`;
+            } catch(e) {}
+        };
+
         const ROLE_CONFIG = {
           '司會': { color: 'bg-purple-100 text-purple-700 border-purple-200', icon: User },
           '執事輪值': { color: 'bg-indigo-100 text-indigo-700 border-indigo-200', icon: BookOpen },
@@ -226,9 +272,8 @@
 
         // --- App Component ---
         function App() {
-          // 修改：初始化 State 時直接讀取 localStorage，實現「秒登入」
-          // 這樣即使重新點開連結，也會因為有紀錄而直接跳過登入畫面
-          const savedUser = typeof window !== 'undefined' ? localStorage.getItem('tbc_user') : null;
+          // 修改：使用新的 getLocalData 函式，同時讀取 localStorage 與 cookie
+          const savedUser = getLocalData('tbc_user');
           
           const [name, setName] = useState(savedUser || '');
           const [currentView, setCurrentView] = useState(savedUser ? 'mySchedule' : 'login'); 
@@ -284,6 +329,17 @@
             };
             loadAllData();
           }, [seasonType, seasonLabels]);
+
+          // 二重確保：如果 render 時沒抓到（例如 SSR 或特殊情況），在 mount 後再試一次
+          useEffect(() => {
+            if (!savedUser && currentView === 'login') {
+                const retrySavedUser = getLocalData('tbc_user');
+                if (retrySavedUser) {
+                    setName(retrySavedUser);
+                    setCurrentView('mySchedule');
+                }
+            }
+          }, []);
           
           const handleLogin = (e) => {
             e.preventDefault();
@@ -292,8 +348,8 @@
             
             const userExists = peopleData.some(p => p.name === trimmedName);
             if (userExists || peopleData.length === 0) {
-                // 登入成功時，儲存姓名到 localStorage
-                localStorage.setItem('tbc_user', trimmedName);
+                // 登入成功時，同時儲存到 localStorage 和 cookie
+                setLocalData('tbc_user', trimmedName);
                 setCurrentView('mySchedule');
                 setLoginError('');
             } else {
@@ -302,8 +358,8 @@
           };
 
           const handleLogout = () => {
-            // 登出時，移除 localStorage 的姓名
-            localStorage.removeItem('tbc_user');
+            // 登出時，移除儲存資料
+            removeLocalData('tbc_user');
             setName('');
             setLoginError('');
             setSwapRequest(null);

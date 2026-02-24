@@ -8,12 +8,14 @@
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/@babel/standalone@7.22.20/babel.min.js"></script>
 
+    <!-- 加入 Supabase 的函式庫 -->
     <script type="importmap">
     {
         "imports": {
             "react": "https://esm.sh/react@18.2.0",
             "react-dom/client": "https://esm.sh/react-dom@18.2.0/client",
-            "lucide-react": "https://esm.sh/lucide-react@0.344.0?external=react,react-dom"
+            "lucide-react": "https://esm.sh/lucide-react@0.344.0?external=react,react-dom",
+            "@supabase/supabase-js": "https://esm.sh/@supabase/supabase-js@2"
         }
     }
     </script>
@@ -52,52 +54,36 @@
           Coffee, RefreshCw, AlertCircle, ArrowLeft, UserCheck, HandHeart, 
           Clock, Briefcase, Info, Lock, Unlock, Link as LinkIcon, X, Timer, UserX, CalendarPlus
         } from 'lucide-react';
+        import { createClient } from '@supabase/supabase-js';
 
-        const API_URL = "https://script.google.com/macros/s/AKfycbxjnNHK8QB8yW8rF_izV5SJBeZ0Go6KE13qzPX06d5knUV9VUK6WsPtI5h5n79ujPVFOA/exec";
+        // --- Supabase 初始化設定 ---
+        const SUPABASE_URL = "https://jcepavwocdujoeoqxvsd.supabase.co";
+        const SUPABASE_KEY = "sb_publishable_Tj2n8e3yY1HyvaFzXRyO_w_PWrVFB7E";
+        const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
         
-        // --- 核心權限判斷邏輯 (升級版) ---
+        // --- 核心權限判斷邏輯 ---
         const checkIsOpen = () => {
             if (typeof window === 'undefined') return false;
-            
             const params = new URLSearchParams(window.location.search);
-            
-            // 1. 檢查是否有 auth 金鑰 (限時開啟)
             const auth = params.get('auth');
             if (auth) {
                 try {
-                    // 解碼 base64
                     const decoded = atob(auth);
                     const data = JSON.parse(decoded);
-                    // 檢查是否過期
-                    if (data.exp && Date.now() < data.exp) {
-                        return true;
-                    }
-                } catch (e) {
-                    console.error("無效的金鑰");
-                }
+                    if (data.exp && Date.now() < data.exp) return true;
+                } catch (e) { console.error("無效的金鑰"); }
             }
-
-            // 2. 檢查強制關閉
             const mode = params.get('mode');
             if (mode === 'close') return false; 
-            
-            // (舊的 mode=open 已移除，確保舊連結失效)
-
             return false;
         };
 
         const ENABLE_PRE_SCHEDULE = checkIsOpen();
 
-        // --- 儲存輔助函式 (針對手機版優化：同時使用 LocalStorage 與 Cookie) ---
+        // --- 儲存輔助函式 ---
         const setLocalData = (key, value) => {
             if (typeof window === 'undefined') return;
-            // 1. 嘗試寫入 LocalStorage
-            try {
-                localStorage.setItem(key, value);
-            } catch (e) {
-                console.warn('LocalStorage access denied');
-            }
-            // 2. 同時寫入 Cookie (作為備案，期限30天)
+            try { localStorage.setItem(key, value); } catch (e) { }
             try {
                 const date = new Date();
                 date.setTime(date.getTime() + (30 * 24 * 60 * 60 * 1000)); 
@@ -108,13 +94,7 @@
         const getLocalData = (key) => {
             if (typeof window === 'undefined') return null;
             let value = null;
-            
-            // 1. 優先讀取 LocalStorage
-            try {
-                value = localStorage.getItem(key);
-            } catch(e) {}
-            
-            // 2. 若沒讀到，嘗試讀取 Cookie
+            try { value = localStorage.getItem(key); } catch(e) {}
             if (!value) {
                 try {
                     const match = document.cookie.match(new RegExp('(^| )' + key + '=([^;]+)'));
@@ -126,12 +106,8 @@
 
         const removeLocalData = (key) => {
             if (typeof window === 'undefined') return;
-            try {
-                localStorage.removeItem(key);
-            } catch(e) {}
-            try {
-                document.cookie = `${key}=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;`;
-            } catch(e) {}
+            try { localStorage.removeItem(key); } catch(e) {}
+            try { document.cookie = `${key}=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;`; } catch(e) {}
         };
 
         const ROLE_CONFIG = {
@@ -145,20 +121,16 @@
           '預設': { color: 'bg-slate-50 text-slate-400 border-slate-100', icon: Clock }
         };
 
-        const DEFAULT_SCHEDULE = [];
-        const DEFAULT_PEOPLE_DATA = [];
-        const DEFAULT_STATS = { "DEFAULT": 0 };
-
         // --- Helper Functions ---
+        // 強化日期解析，適應 Supabase 的 YYYY-MM-DD 格式
         const normalizeDateStr = (d) => {
             if (!d) return '';
             const str = String(d);
-            if (str.includes('T')) {
-                const date = new Date(str);
-                return `${date.getFullYear()}/${date.getMonth()+1}/${date.getDate()}`;
+            const parts = str.includes('-') ? str.split('-') : (str.includes('/') ? str.split('/') : []);
+            if (parts.length >= 3) {
+                const dayPart = parts[2].split('T')[0].split(' ')[0];
+                return `${parseInt(parts[0])}/${parseInt(parts[1])}/${parseInt(dayPart)}`;
             }
-            const parts = str.split('/');
-            if (parts.length === 3) return `${parseInt(parts[0])}/${parseInt(parts[1])}/${parseInt(parts[2])}`;
             return str;
         };
 
@@ -169,36 +141,6 @@
             return new Date(parts[0], parts[1] - 1, parts[2]);
         };
 
-        const sheetToObjects = (rows) => {
-          if (!rows || rows.length < 2) return [];
-          const headers = rows[0];
-          return rows.slice(1).map(row => {
-            const obj = {};
-            headers.forEach((h, i) => { obj[h] = row[i]; });
-            return obj;
-          });
-        };
-
-        const processStatsData = (rawRows) => {
-          const stats = {};
-          if (!Array.isArray(rawRows)) return stats;
-          const isObjectArray = !Array.isArray(rawRows[0]);
-          const dataRows = isObjectArray ? rawRows : rawRows.slice(1);
-          dataRows.forEach(row => {
-            let rowObj = isObjectArray ? row : {};
-            if (!isObjectArray) rawRows[0].forEach((h, i) => { rowObj[h] = row[i]; });
-            
-            const nameKey = Object.keys(rowObj).find(k => k.includes('姓名') || k.toLowerCase() === 'name');
-            const countKey = Object.keys(rowObj).find(k => k.includes('總次數') || k.includes('count'));
-            if (nameKey && countKey) {
-              const name = rowObj[nameKey];
-              const count = parseInt(rowObj[countKey]);
-              if (name && !isNaN(count)) stats[name] = count;
-            }
-          });
-          return stats;
-        };
-        
         const getSeasonLabels = () => {
             const now = new Date();
             const month = now.getMonth() + 1;
@@ -206,68 +148,6 @@
             if (month >= 4 && month <= 6) return { current: '4-6月', next: '7-9月' };
             if (month >= 7 && month <= 9) return { current: '7-9月', next: '10-12月' };
             return { current: '10-12月', next: '1-3月' };
-        };
-
-        const processPeopleData = (rawData) => {
-          if (!Array.isArray(rawData) || rawData.length === 0) return [];
-
-          const isObjectArray = !Array.isArray(rawData[0]);
-          const dataRows = isObjectArray ? rawData : rawData.slice(1); 
-
-          return dataRows.map((row, index) => {
-            let rowObj = row;
-            if (!isObjectArray) {
-                rowObj = {};
-                rawData[0].forEach((h, i) => { rowObj[h] = row[i]; });
-            }
-            const rowValues = Object.values(rowObj);
-
-            const nameKey = Object.keys(rowObj).find(k => k.includes('姓名') || k.toLowerCase() === 'name');
-            const name = nameKey ? rowObj[nameKey] : '';
-            
-            const sessionKey = Object.keys(rowObj).find(k => k.includes('服事時段') || k.includes('session'));
-            const session = sessionKey ? rowObj[sessionKey] : '皆可';
-
-            const unavailableKey = Object.keys(rowObj).find(k => k.includes('不能參與') || k.includes('unavailable'));
-            const unavailable = unavailableKey ? rowObj[unavailableKey] : '';
-
-            const willingnessKey = Object.keys(rowObj).find(k => k.includes('服事意願') || k.includes('willingness'));
-            const willingness = willingnessKey ? String(rowObj[willingnessKey]) : '';
-
-            let rawGroup = rowValues.length > 1 ? String(rowValues[1] || '') : '';
-            let rawSession2 = rowValues.length > 5 ? String(rowValues[5] || '') : '';
-
-            let groupId = rawGroup.toUpperCase().trim();
-            let session2 = rawSession2.trim();
-
-            if (!groupId.includes('FA') && !groupId.includes('FB')) {
-                const gKey = Object.keys(rowObj).find(k => k.toUpperCase().includes('ID') || k.includes('群組'));
-                if (gKey) groupId = String(rowObj[gKey] || '').toUpperCase().trim();
-            }
-            
-            const s2Key = Object.keys(rowObj).find(k => k.includes('主日服事二堂'));
-            if (s2Key) {
-                session2 = String(rowObj[s2Key]).trim();
-            } else {
-                if (!session2.includes('1') && !session2.includes('2')) {
-                    const altKey = Object.keys(rowObj).find(k => (k.includes('二堂') || k.includes('2堂')) && !k.includes('時段'));
-                    if (altKey) session2 = String(rowObj[altKey]).trim();
-                }
-            }
-
-            let finalSession2 = '';
-            const s2Upper = session2.toUpperCase();
-            if (s2Upper.includes('S1') || s2Upper.includes('1')) finalSession2 = 'S1';
-            else if (s2Upper.includes('S2') || s2Upper.includes('2')) finalSession2 = 'S2';
-
-            const roles = {};
-            Object.keys(ROLE_CONFIG).forEach(roleName => {
-              const key = Object.keys(rowObj).find(k => k.trim() === roleName);
-              if (key && rowObj[key]) roles[roleName] = "O";
-            });
-
-            return { name, session, unavailable, willingness, roles, groupId, session2: finalSession2 };
-          }).filter(p => p.name);
         };
 
         // --- App Component ---
@@ -279,15 +159,14 @@
           
           const [loginError, setLoginError] = useState('');
           const [swapRequest, setSwapRequest] = useState(null); 
-          const [scheduleData, setScheduleData] = useState(DEFAULT_SCHEDULE);
-          const [peopleData, setPeopleData] = useState(DEFAULT_PEOPLE_DATA);
-          const [statsData, setStatsData] = useState(DEFAULT_STATS);
+          const [scheduleData, setScheduleData] = useState([]);
+          const [peopleData, setPeopleData] = useState([]);
+          const [statsData, setStatsData] = useState({});
           
           const [isSyncing, setIsSyncing] = useState(true);
           const [syncStatus, setSyncStatus] = useState('');
           const [progress, setProgress] = useState(0);
           
-          // 修改：如果是由「限時開啟」連結進入 (ENABLE_PRE_SCHEDULE 為 true)，預設顯示「預排表 (next)」，否則顯示「當季表 (view)」
           const [seasonType, setSeasonType] = useState(ENABLE_PRE_SCHEDULE ? 'next' : 'view'); 
           const seasonLabels = useMemo(() => getSeasonLabels(), []);
 
@@ -297,40 +176,91 @@
               setProgress(10);
 
               try {
-                const typeSuffix = seasonType; 
+                // 1. 同步抓取 Supabase 四張資料表
+                const [
+                    { data: membersData, error: errM },
+                    { data: positionsData, error: errP },
+                    { data: memberPositionsData, error: errMP },
+                    { data: schedulesData, error: errS }
+                ] = await Promise.all([
+                    supabase.from('members').select('*'),
+                    supabase.from('positions').select('*'),
+                    supabase.from('member_positions').select('*'),
+                    supabase.from('schedules').select('*, members(name), positions(name)')
+                ]);
 
-                const resSchedule = await fetch(`${API_URL}?type=schedule_${typeSuffix}`).then(r => r.json());
-                setProgress(40);
-                if (resSchedule.status === 'success') {
-                  const isObj = !Array.isArray(resSchedule.data[0]);
-                  setScheduleData(isObj ? resSchedule.data : sheetToObjects(resSchedule.data));
-                }
+                if (errM) throw errM;
+                if (errP) throw errP;
+                if (errMP) throw errMP;
+                if (errS) throw errS;
 
-                const resData = await fetch(`${API_URL}?type=data_${typeSuffix}`).then(r => r.json());
+                setProgress(50);
+
+                // 2. 轉換 members 成為前端需要的格式 (peopleData)
+                const transformedPeople = membersData.map(m => {
+                    const pRoles = {};
+                    const myPositions = memberPositionsData.filter(mp => mp.member_id === m.id);
+                    myPositions.forEach(mp => {
+                        const pos = positionsData.find(p => p.id === mp.position_id);
+                        if (pos) pRoles[pos.name.trim()] = "O";
+                    });
+
+                    return {
+                        name: m.name,
+                        session: m.preferred_session || '皆可',
+                        unavailable: m.unavailable_dates ? m.unavailable_dates.join(',') : '',
+                        willingness: m.availability_status || '',
+                        groupId: m.group_id || '',
+                        session2: m.dual_service_pref === 1 ? 'S1' : (m.dual_service_pref === 2 ? 'S2' : ''),
+                        roles: pRoles
+                    };
+                });
+                setPeopleData(transformedPeople);
                 setProgress(70);
-                if (resData.status === 'success') {
-                    setPeopleData(processPeopleData(resData.data));
-                }
 
-                const resStats = await fetch(`${API_URL}?type=stats_${typeSuffix}`).then(r => r.json());
-                setProgress(95);
-                if (resStats.status === 'success') {
-                    setStatsData(processStatsData(resStats.data));
-                }
+                // 3. 轉換 schedules 成為前端需要的橫向格式 (scheduleData)，並統計次數
+                const groupedSchedules = {};
+                const currentStats = {};
 
+                schedulesData.forEach(s => {
+                    const date = s.service_date;
+                    const session = s.session;
+                    const key = `${date}|${session}`;
+                    
+                    if (!groupedSchedules[key]) {
+                        groupedSchedules[key] = { '日期': date, '堂別': session };
+                    }
+                    
+                    const posName = s.positions?.name?.trim();
+                    const memberName = s.members?.name;
+                    
+                    if (posName && memberName) {
+                        // 如果該崗位已經有人，用「、」串接起來（還原舊系統結構）
+                        if (groupedSchedules[key][posName]) {
+                            groupedSchedules[key][posName] += `、${memberName}`;
+                        } else {
+                            groupedSchedules[key][posName] = memberName;
+                        }
+                        // 累積統計資料
+                        currentStats[memberName] = (currentStats[memberName] || 0) + 1;
+                    }
+                });
+                
+                setScheduleData(Object.values(groupedSchedules));
+                setStatsData(currentStats);
+                
                 setProgress(100);
                 setSyncStatus('同步成功');
               } catch (err) {
-                console.error("同步失敗", err);
+                console.error("Supabase 同步失敗", err);
                 setSyncStatus('連線發生錯誤');
               } finally {
                 setTimeout(() => setIsSyncing(false), 500);
               }
             };
             loadAllData();
-          }, [seasonType, seasonLabels]);
+          }, []); // 只需在載入時抓取一次完整資料庫
 
-          // 二重確保：如果 render 時沒抓到（例如 SSR 或特殊情況），在 mount 後再試一次
           useEffect(() => {
             if (!savedUser && currentView === 'login') {
                 const retrySavedUser = getLocalData('tbc_user');
@@ -352,7 +282,7 @@
                 setCurrentView('mySchedule');
                 setLoginError('');
             } else {
-                setLoginError('請輸入完整姓名');
+                setLoginError('請輸入完整姓名，或確認是否已加入同工名單');
             }
           };
 
@@ -382,30 +312,24 @@
 
             const baseUrl = window.location.href.split('?')[0];
             
-            // 修改：產生季末 (3/31, 6/30, 9/30, 12/31) 自動關閉連結
             const generateQuarterlyLink = () => {
                 const now = new Date();
-                const currentMonth = now.getMonth(); // 0-11
+                const currentMonth = now.getMonth();
                 const currentYear = now.getFullYear();
                 
-                // 目標月份索引：3月(2), 6月(5), 9月(8), 12月(11)
                 const quarters = [2, 5, 8, 11];
                 let targetMonth = quarters.find(m => m >= currentMonth);
                 let targetYear = currentYear;
 
-                // 防呆：如果都沒找到 (理論上不會，因為 11 >= 11)，預設為明年3月
                 if (targetMonth === undefined) {
                     targetMonth = 2;
                     targetYear++;
                 }
 
-                // 計算該月最後一天：下個月的第 0 天
                 const expirationDate = new Date(targetYear, targetMonth + 1, 0);
-                // 設定為當天最後一秒 23:59:59
                 expirationDate.setHours(23, 59, 59, 999);
                 const timestamp = expirationDate.getTime();
                 
-                // 製作金鑰
                 const payload = JSON.stringify({ exp: timestamp });
                 const token = btoa(payload);
                 
@@ -420,7 +344,6 @@
                 navigator.clipboard.writeText(url).then(() => alert(`連結已複製！\n此連結將於 [${dateStr}] 自動失效。`));
             };
             
-            // 為了顯示在畫面上，即時計算一下目前的季末日期
             const { dateStr: displayDate } = generateQuarterlyLink();
 
             return (
@@ -455,7 +378,6 @@
 
         // --- Views ---
         function LoginView({ name, setName, onLogin, loginError, isSyncing, syncStatus, progress, seasonType, setSeasonType, seasonLabels }) {
-          // 管理員密技：點擊 LOGO 3次開啟管理選單
           const [logoClicks, setLogoClicks] = useState(0);
           const [showAdmin, setShowAdmin] = useState(false);
 
@@ -510,7 +432,7 @@
                   )}
 
                   <p className="text-slate-400 mt-4 font-medium text-sm">
-                    資料同步成功，再輸入完整姓名
+                    資料同步成功，請輸入完整姓名
                   </p>
                 </div>
 
@@ -554,8 +476,6 @@
           const [flatShifts, setFlatShifts] = useState([]);
           const numberedRoles = ['接待', '收奉獻', '主餐', '新朋友關懷']; 
           
-          const myData = peopleData.find(p => p.name === name) || {};
-
           useEffect(() => {
             const searchName = name.trim();
             const tempShifts = [];
@@ -568,6 +488,8 @@
               if (!dateStr) return;
               const dateObj = parseDateObj(row['日期']);
 
+              // Supabase 版本中，可以自行決定是否要顯示過去歷史
+              // 這裡保留你原本的邏輯：只顯示今天之後的班表
               if (dateObj < today) return;
 
               const session = row['堂別'];
@@ -599,15 +521,12 @@
             setFlatShifts(Array.from(shiftsMap.values()).sort((a, b) => a.dateObj - b.dateObj));
           }, [name, scheduleData]);
 
-          // --- 修改：改回 Google 行事曆連結 (不下載檔案)，並加入 ctz 修正時區 ---
           const addToGoogleCalendar = (shift) => {
-             // 1. 取得年月日 (本地時間字串)
              const year = shift.dateObj.getFullYear();
              const month = String(shift.dateObj.getMonth() + 1).padStart(2, '0');
              const day = String(shift.dateObj.getDate()).padStart(2, '0');
              const dateStr = `${year}${month}${day}`;
              
-             // 2. 設定時間
              let startTime = '090000';
              let endTime = '103000';
              
@@ -626,8 +545,6 @@
              const title = encodeURIComponent(`${shift.role}`);
              const details = encodeURIComponent(`台中浸信會主日服事: ${shift.role}\n堂數: ${shift.session}`);
              
-             // 3. 關鍵修正：加入 &ctz=Asia/Taipei 參數
-             // 這樣 Google 就會知道 "20240222T090000" 是台北時間，不會亂轉時區
              const url = `https://www.google.com/calendar/render?action=TEMPLATE&text=${title}&dates=${start}/${end}&details=${details}&ctz=Asia/Taipei`;
              
              window.open(url, '_blank', 'noopener,noreferrer');
@@ -688,9 +605,7 @@
                              </svg>
                              <div className={`absolute inset-0 flex items-center justify-center text-xs font-black ${seasonType === 'view' ? 'text-indigo-500' : 'text-emerald-500'}`}>{progress}%</div>
                         </div>
-                        
                         <h3 className="text-lg font-black text-slate-800 mb-6">資料載入中</h3>
-                        
                         <div className="w-full bg-slate-100 rounded-full h-2 overflow-hidden">
                             <div className={`h-full rounded-full transition-all duration-300 ease-out ${seasonType === 'view' ? 'bg-indigo-500' : 'bg-emerald-500'}`} style={{ width: `${progress}%` }}></div>
                         </div>
@@ -714,16 +629,12 @@
                              </div>
                           </div>
                           
-                          {/* 右側按鈕區：改為 flex-col (上下排列) */}
                           <div className="flex flex-col gap-2">
-                              {/* 加入行事曆按鈕 (僅在當季班表顯示) - 純文字版 */}
                               {seasonType === 'view' && (
                                 <button onClick={() => addToGoogleCalendar(shift)} className="bg-white hover:bg-blue-50 text-blue-600 px-3 py-1.5 rounded-lg transition-all active:scale-95 border border-blue-200 flex-shrink-0 shadow-sm text-xs font-bold text-center whitespace-nowrap">
                                     加入行事曆
                                 </button>
                               )}
-
-                              {/* 換班查詢按鈕 - 純文字版 */}
                               <button onClick={() => onRequestSwap({ date: shift.date, role: shift.role, session: shift.rawSession, owner: name })} className="bg-white hover:bg-emerald-50 text-emerald-600 px-3 py-1.5 rounded-lg transition-all active:scale-95 border border-emerald-200 flex-shrink-0 shadow-sm text-xs font-bold text-center whitespace-nowrap">
                                 換班查詢
                               </button>
@@ -734,9 +645,7 @@
                   ) : (
                     <div className="text-center py-20 bg-white rounded-[2rem] border-2 border-dashed border-slate-200">
                       <div className="bg-slate-50 w-20 h-20 rounded-full flex items-center justify-center mx-auto mb-4 text-slate-300"><Briefcase size={40} /></div>
-                      <p className="text-slate-400 font-bold text-lg">
-                          查無資料
-                      </p>
+                      <p className="text-slate-400 font-bold text-lg">查無資料</p>
                       <p className="text-sm text-slate-300 mt-1">
                           {seasonType === 'view' ? `${seasonLabels.current} 沒有排班，好好休息` : `${seasonLabels.next} 沒有排班，好好休息`}
                       </p>
@@ -865,17 +774,14 @@
                                   <div className="flex items-center gap-1 text-xs font-bold text-slate-400 mt-1">
                                     <span className="bg-slate-100 px-1.5 py-0.5 rounded">{person.session}</span>
                                     <span>•</span>
-                                    <span>{seasonType === 'view' ? '本季' : '預排'}服事 {person.stats} 次</span>
+                                    <span>累積服事 {person.stats} 次</span>
                                     
-                                    {/* H 標記 (FA/FB) */}
                                     {person.groupId.includes('FA') && (
                                         <span className="ml-1 px-1.5 h-5 rounded-[4px] bg-slate-400 text-white flex items-center justify-center text-[10px] font-bold" title="群組: FA">FA</span>
                                     )}
                                     {person.groupId.includes('FB') && (
                                         <span className="ml-1 px-1.5 h-5 rounded-[4px] bg-slate-400 text-white flex items-center justify-center text-[10px] font-bold" title="群組: FB">FB</span>
                                     )}
-
-                                    {/* S 標記 (S1/S2) */}
                                     {(person.session2 === 'S1' || person.session2 === 'S2') && (
                                         <span className="ml-1 px-1.5 h-5 rounded-[4px] bg-slate-400 text-white flex items-center justify-center text-[10px] font-bold" title={`二堂服事: ${person.session2}`}>{person.session2}</span>
                                     )}

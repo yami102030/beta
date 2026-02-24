@@ -150,7 +150,7 @@
             return { current: '10-12月', next: '1-3月' };
         };
 
-        // --- 新增：取得指定日期的「年-季」字串 (例如 2026-Q1) ---
+        // --- 取得指定日期的「年-季」字串 (例如 2026-Q1) ---
         const getQuarterStr = (date) => {
             return `${date.getFullYear()}-Q${Math.ceil((date.getMonth() + 1) / 3)}`;
         };
@@ -488,7 +488,7 @@
             const today = new Date();
             today.setHours(0, 0, 0, 0);
 
-            // --- 新增：計算目前該顯示哪一季的資料 ---
+            // 計算目前該顯示哪一季的資料
             const targetQStr = seasonType === 'view' 
                 ? getQuarterStr(today) 
                 : getQuarterStr(new Date(today.getFullYear(), today.getMonth() + 3, 1));
@@ -502,7 +502,7 @@
               // 這裡保留你原本的邏輯：只顯示今天之後的班表
               if (dateObj < today) return;
 
-              // --- 新增：過濾掉非目標季別的資料 ---
+              // 過濾掉非目標季別的資料
               if (getQuarterStr(dateObj) !== targetQStr) return;
 
               const session = row['堂別'];
@@ -532,7 +532,6 @@
                }
             });
             setFlatShifts(Array.from(shiftsMap.values()).sort((a, b) => a.dateObj - b.dateObj));
-          // --- 修正：在監聽陣列中加入 seasonType，讓切換按鈕生效 ---
           }, [name, scheduleData, seasonType]); 
 
           const addToGoogleCalendar = (shift) => {
@@ -692,7 +691,7 @@
             const today = new Date();
             today.setHours(0, 0, 0, 0);
 
-            // --- 新增：換班查詢也需要過濾季別 ---
+            // 換班查詢也需要過濾季別
             const targetQStr = seasonType === 'view' 
                 ? getQuarterStr(today) 
                 : getQuarterStr(new Date(today.getFullYear(), today.getMonth() + 3, 1));
@@ -719,7 +718,7 @@
                  
                  if(rDateObj < today) return;
 
-                 // --- 新增：過濾掉非目標季別的換班選項 ---
+                 // 過濾掉非目標季別的換班選項
                  if (getQuarterStr(rDateObj) !== targetQStr) return;
 
                  if(rDate === targetDateNorm || requesterBusyDates.has(rDate)) return;
@@ -743,7 +742,6 @@
 
             potential.sort((a, b) => a.stats - b.stats);
             setCandidates(potential);
-          // --- 修正：在監聽陣列中加入 seasonType ---
           }, [initialRequest, scheduleData, peopleData, statsData, seasonType]);
 
           return (

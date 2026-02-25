@@ -696,6 +696,23 @@
                 ? getQuarterStr(today) 
                 : getQuarterStr(new Date(today.getFullYear(), today.getMonth() + 3, 1));
 
+            // 新增：僅計算「當前季別」的服事次數
+            const seasonStats = {};
+            scheduleData.forEach(row => {
+                const rDateObj = parseDateObj(row['日期']);
+                if (getQuarterStr(rDateObj) === targetQStr) {
+                    Object.entries(row).forEach(([k, v]) => {
+                        if (['日期', '堂別'].includes(k)) return;
+                        if (v && typeof v === 'string') {
+                            const names = String(v).split(/,|、|，|\s+/).map(n => n.trim()).filter(n => n);
+                            names.forEach(n => {
+                                seasonStats[n] = (seasonStats[n] || 0) + 1;
+                            });
+                        }
+                    });
+                }
+            });
+
             let potential = [];
             peopleData.forEach(person => {
               if (person.name === targetOwner) return;
@@ -737,12 +754,13 @@
                  }
               });
 
-              potential.push({ ...person, swapOptions, stats: statsData[person.name] || 0 });
+              // 修改 stats: 改為使用本季服事次數
+              potential.push({ ...person, swapOptions, stats: seasonStats[person.name] || 0 });
             });
 
             potential.sort((a, b) => a.stats - b.stats);
             setCandidates(potential);
-          }, [initialRequest, scheduleData, peopleData, statsData, seasonType]);
+          }, [initialRequest, scheduleData, peopleData, seasonType]);
 
           return (
             <div className="min-h-screen bg-slate-50 flex flex-col">
@@ -773,7 +791,7 @@
                   <div className="space-y-4 animate-in fade-in">
                     <div className="flex items-center justify-between px-2">
                       <h3 className="font-black text-slate-700 flex items-center gap-2"><UserCheck className="text-emerald-500" /> 推薦人選 ({candidates.length})</h3>
-                      <span className="text-[10px] bg-slate-200 text-slate-500 px-2 py-1 rounded">依服事次數排序</span>
+                      <span className="text-[10px] bg-slate-200 text-slate-500 px-2 py-1 rounded">依本季次數排序</span>
                     </div>
                     {candidates.length > 0 ? (
                       candidates.map((person, idx) => (
@@ -795,7 +813,7 @@
                                   <div className="flex items-center gap-1 text-xs font-bold text-slate-400 mt-1">
                                     <span className="bg-slate-100 px-1.5 py-0.5 rounded">{person.session}</span>
                                     <span>•</span>
-                                    <span>累積服事 {person.stats} 次</span>
+                                    <span>本季服事 {person.stats} 次</span>
                                     
                                     {person.groupId.includes('FA') && (
                                         <span className="ml-1 px-1.5 h-5 rounded-[4px] bg-slate-400 text-white flex items-center justify-center text-[10px] font-bold" title="群組: FA">FA</span>

@@ -784,6 +784,9 @@
               const addedSwaps = new Set();
               const processedDeaconDates = new Set();
 
+              // 取得原排班者的請假日期
+              const requesterUnavailDates = requester?.unavailable ? requester.unavailable.split(',').map(d => normalizeDateStr(d.trim())) : [];
+
               scheduleData.forEach(row => {
                  const rDate = normalizeDateStr(row['日期']);
                  const rDateObj = parseDateObj(row['日期']);
@@ -794,6 +797,9 @@
                  if (getQuarterStr(rDateObj) !== targetQStr) return;
                  // 不能與當天互換
                  if(rDate === targetDateNorm) return;
+                 
+                 // 如果要換過去的那天，原排班者有請假，則不能互換
+                 if (requesterUnavailDates.includes(rDate)) return;
                  
                  Object.entries(row).forEach(([k, v]) => {
                     if(['日期','堂別'].includes(k)) return;

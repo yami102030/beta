@@ -252,7 +252,7 @@
                       unavailable: unavail,
                       willingness: qs?.availability_status || m.availability_status || '可排班',
                       groupId: m.group_id || '',
-                      session2: parseInt(qs?.dual_service_pref ?? m.dual_service_pref ?? 0, 10) === 1 ? 'S1' : (parseInt(qs?.dual_service_pref ?? m.dual_service_pref ?? 0, 10) === 2 ? 'S2' : ''),
+                      session2: parseInt(qs?.dual_service_pref ?? m.dual_service_pref ?? 0, 10) === 1 ? '二堂同崗' : (parseInt(qs?.dual_service_pref ?? m.dual_service_pref ?? 0, 10) === 2 ? '二堂異崗' : ''),
                       roles: pRoles
                   };
               });
@@ -935,8 +935,8 @@
                                     {person.groupId.includes('FB') && (
                                         <span className="ml-1 px-1.5 h-5 rounded-[4px] bg-slate-400 text-white flex items-center justify-center text-[10px] font-bold" title="群組: FB">FB</span>
                                     )}
-                                    {(person.session2 === 'S1' || person.session2 === 'S2') && (
-                                        <span className="ml-1 px-1.5 h-5 rounded-[4px] bg-slate-400 text-white flex items-center justify-center text-[10px] font-bold" title={`二堂服事: ${person.session2}`}>{person.session2}</span>
+                                    {person.session2 && (
+                                        <span className={`ml-1 px-1.5 h-5 rounded-[4px] text-white flex items-center justify-center text-[10px] font-bold ${person.session2 === '二堂同崗' ? 'bg-indigo-400' : 'bg-purple-400'}`} title={person.session2}>{person.session2}</span>
                                     )}
                                   </div>
                                 </div>

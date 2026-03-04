@@ -776,79 +776,43 @@
               });
 
               const reqSession = String(initialRequest.session || '').trim();
-              
-              // 定義同日同堂可以互相兼任的崗位名單
+              const activeRole = initialRequest.role;
               const compatibleRoles = ['接待', '收奉獻', '主餐', '新朋友關懷'];
               
-              // 推薦資格邏輯完全對齊預排系統 (Admin)
-              if (initialRequest.role === '執事輪值') {
-                  // 如果候選人當天已經是執事，則不推薦
+              // 推薦資格邏輯【完全 1:1 對齊】預排系統 (Admin) 的嚴格判斷
+              if (activeRole === '執事輪值') {
                   if (mShiftsToday.some(d => d.role === '執事輪值')) return;
-                  // 如果候選人當天已經有其他服事，也不推薦他當執事 (避免分身乏術)
-                  if (mShiftsToday.length > 0) return;
               } else {
-                  // 檢查候選人是否在該堂別已經擔任了同一個崗位 (避免同一堂做兩次一樣的崗位)
-                  const rolesThisSession = mShiftsToday.filter(d => d.session === reqSession).map(d => d.role);
-                  if (rolesThisSession.includes(initialRequest.role)) return;
+                  // 1. 檢查同一堂次的兼任相容性
+                  const shiftsThisSession = mShiftsToday.filter(d => d.session === reqSession);
+                  if (shiftsThisSession.length > 0) {
+                      const allExistingAreConcurrent = shiftsThisSession.every(d => compatibleRoles.includes(d.role));
+                      const isActiveConcurrent = compatibleRoles.includes(activeRole);
 
-                  // 核心修正：跨堂防呆、同堂兼任與二堂支援規則
-                  if (mShiftsToday.length > 0) {
-                      // 1. 執事防呆：如果他當天已經是執事，就不能再接任何服事
-                      if (mShiftsToday.some(d => d.role === '執事輪值')) return;
-                      
-                      // 2. 上限防呆：每人每天最多只能排 2 個班 (不論是跨堂還是同堂兼任)
-                      if (mShiftsToday.length >= 2) return;
+                      if (!allExistingAreConcurrent || !isActiveConcurrent) {
+                          return; // 只要有一個不是四大相容崗位，就不能排
+                      }
 
-                      const hasDualService = Boolean(person.session2);
-                      const isRequestCompatible = compatibleRoles.includes(initialRequest.role);
-                      const rolesToday = mShiftsToday.map(d => d.role);
-                      
-                      // 判斷是否為「同堂兼任」的狀況 (現有的班和欲推薦的班都在同一堂)
-                      const isAllSameSession = mShiftsToday.every(d => d.session === reqSession);
-                      
-                      if (isAllSameSession) {
-                          // 同堂兼任檢查：新舊崗位都必須在允許兼任的 compatibleRoles 名單中
-                          const areExistingCompatible = rolesThisSession.every(r => compatibleRoles.includes(r));
-                          if (isRequestCompatible && areExistingCompatible) {
-                              // 允許同堂兼任，直接放行！
-                          } else {
-                              // 不符合同堂兼任條件，不能再接同堂的缺
-                              return;
-                          }
-                      } else {
-                          // 跨堂狀況
-                          if (!hasDualService) return; // 沒開啟二堂支援，不能跨堂
-                          
-                          // 如果是「二堂同崗」，當天已有服事，新的服事必須是「同一個崗位」
-                          if (person.session2 === '二堂同崗' && !rolesToday.includes(initialRequest.role)) return;
-                          
-                          // 如果是「二堂異崗」，當天已有服事，新的服事必須是「不同崗位」
-                          if (person.session2 === '二堂異崗' && rolesToday.includes(initialRequest.role)) return;
+                      if (shiftsThisSession.some(d => d.role === activeRole)) {
+                          return; // 防呆：不能在同一堂重複接同一個崗位
                       }
                   }
 
-                  // 嚴格檢查堂別偏好
-                  // 如果有設定二堂支援，我們暫時視為他兩堂都可以去，交由上面的防呆規則來限制
-                  const hasDualService = Boolean(person.session2);
-                  
-                  if (!hasDualService) {
+                  // 2. 檢查另一堂次的二堂支援規則
+                  const shiftsOtherSession = mShiftsToday.filter(d => d.session !== reqSession);
+                  const dualPref = person.session2 === '二堂同崗' ? 1 : (person.session2 === '二堂異崗' ? 2 : 0);
+
+                  if (shiftsOtherSession.length > 0) {
+                      if (dualPref === 0) return; // 偏好單堂服事者，不推薦接第二堂
+
+                      const otherRoles = shiftsOtherSession.map(d => d.role);
+                      if (dualPref === 1 && !otherRoles.includes(activeRole)) return; // 偏好同崗，但新崗位不同
+                      if (dualPref === 2 && otherRoles.includes(activeRole)) return;  // 偏好異崗，但新崗位相同
+                  } else {
+                      // 3. 沒有跨堂服事時，嚴格檢查堂別偏好
                       const pSession = String(person.session || '').trim();
-                      if (!pSession.includes('皆可')) {
-                          const isS1 = reqSession.includes('S1') || reqSession.includes('第一堂') || reqSession.includes('一堂');
-                          const isS2 = reqSession.includes('S2') || reqSession.includes('第二堂') || reqSession.includes('二堂');
-                          const isS3 = reqSession.includes('S3') || reqSession.includes('第三堂') || reqSession.includes('三堂');
-
-                          const pIsS1 = pSession.includes('S1') || pSession.includes('第一堂') || pSession.includes('一堂');
-                          const pIsS2 = pSession.includes('S2') || pSession.includes('第二堂') || pSession.includes('二堂');
-                          const pIsS3 = pSession.includes('S3') || pSession.includes('第三堂') || pSession.includes('三堂');
-
-                          let sessionMatch = false;
-                          if (isS1 && pIsS1) sessionMatch = true;
-                          if (isS2 && pIsS2) sessionMatch = true;
-                          if (isS3 && pIsS3) sessionMatch = true;
-                          if (!isS1 && !isS2 && !isS3 && pSession.includes(reqSession)) sessionMatch = true;
-
-                          if (!sessionMatch) return;
+                      if (dualPref === 0 && pSession && !pSession.includes('皆可')) {
+                          if (!pSession.includes(reqSession.replace('堂', ''))) return;
                       }
                   }
               }

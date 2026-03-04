@@ -786,6 +786,22 @@
                   const rolesThisSession = mShiftsToday.filter(d => d.session === reqSession).map(d => d.role);
                   if (rolesThisSession.includes(initialRequest.role)) return;
 
+                  // ============== 修正 2：跨堂防呆與二堂支援規則 (對齊 Admin) ==============
+                  if (mShiftsToday.length > 0) {
+                      const hasDualService = Boolean(person.session2);
+                      const rolesToday = mShiftsToday.map(d => d.role);
+                      
+                      // 規則 A：如果沒有開啟二堂支援，一天只能服事一堂
+                      if (!hasDualService) return;
+                      
+                      // 規則 B：如果是「二堂同崗」，當天有服事的話，新的服事必須是「同一個崗位」
+                      if (person.session2 === '二堂同崗' && !rolesToday.includes(initialRequest.role)) return;
+                      
+                      // 規則 C：如果是「二堂異崗」，當天有服事的話，新的服事必須是「不同崗位」
+                      if (person.session2 === '二堂異崗' && rolesToday.includes(initialRequest.role)) return;
+                  }
+                  // ========================================================================
+
                   // 修正：嚴格檢查堂別偏好 (若非皆可，且無二堂支援設定時，才嚴格過濾)
                   const pSession = String(person.session || '').trim();
                   const hasDualService = Boolean(person.session2);

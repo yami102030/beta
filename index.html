@@ -681,9 +681,17 @@
             if (!initialRequest) return;
             const targetDateNorm = normalizeDateStr(initialRequest.date);
             const schedulesOnDate = scheduleData.filter(s => normalizeDateStr(s['日期']) === targetDateNorm);
+            
+            // 修正：嚴格的名字比對陣列，避免把「林小明」誤判為「小明」忙碌
             const requesterBusyDates = new Set();
             scheduleData.forEach(row => {
-               if(Object.values(row).some(v => String(v).includes(targetOwner))) requesterBusyDates.add(normalizeDateStr(row['日期']));
+               Object.entries(row).forEach(([k, v]) => {
+                  if (['日期', '堂別'].includes(k)) return;
+                  if (v && typeof v === 'string') {
+                      const names = v.split(/,|、|，|\s+/).map(n => n.trim());
+                      if (names.includes(targetOwner)) requesterBusyDates.add(normalizeDateStr(row['日期']));
+                  }
+               });
             });
 
             const requester = peopleData.find(p => p.name === targetOwner);
@@ -696,7 +704,7 @@
                 ? getQuarterStr(today) 
                 : getQuarterStr(new Date(today.getFullYear(), today.getMonth() + 3, 1));
 
-            // 新增：僅計算「當前季別」的服事次數
+            // 僅計算「當前季別」的服事次數
             const seasonStats = {};
             scheduleData.forEach(row => {
                 const rDateObj = parseDateObj(row['日期']);
@@ -718,11 +726,40 @@
               if (person.name === targetOwner) return;
               if (person.willingness.includes('休息') || person.willingness.includes('暫停')) return;
               if (!person.roles[initialRequest.role]) return;
-              if (initialRequest.role !== '執事輪值' && person.session !== '皆可' && !person.session.includes(initialRequest.session)) return;
               
+              // 修正：強化堂別判斷。預排時堂別可能尚未填寫（undefined / null / 空白），不應直接濾掉所有人
+              const reqSession = String(initialRequest.session || '').trim();
+              const pSession = String(person.session || '').trim() + " " + String(person.session2 || '').trim();
+              
+              if (initialRequest.role !== '執事輪值' && reqSession && reqSession !== 'null' && reqSession !== 'undefined') {
+                  const isS1 = reqSession.includes('S1') || reqSession.includes('第一堂') || reqSession.includes('一堂');
+                  const isS2 = reqSession.includes('S2') || reqSession.includes('第二堂') || reqSession.includes('二堂');
+                  const isS3 = reqSession.includes('S3') || reqSession.includes('第三堂') || reqSession.includes('三堂');
+
+                  const pIsS1 = pSession.includes('S1') || pSession.includes('第一堂') || pSession.includes('一堂');
+                  const pIsS2 = pSession.includes('S2') || pSession.includes('第二堂') || pSession.includes('二堂');
+                  const pIsS3 = pSession.includes('S3') || pSession.includes('第三堂') || pSession.includes('三堂');
+
+                  const sessionMatch = 
+                      pSession.includes('皆可') || 
+                      (isS1 && pIsS1) || 
+                      (isS2 && pIsS2) || 
+                      (isS3 && pIsS3) || 
+                      (!isS1 && !isS2 && !isS3 && pSession.includes(reqSession)); // 保底直接比對字串
+                  
+                  if (!sessionMatch) return;
+              }
+              
+              // 修正：精準比對當天忙碌狀態，防止姓名子字串衝突（例：王力 與 王力宏）
               let isBusy = false;
               schedulesOnDate.forEach(s => {
-                 if(Object.values(s).some(v => String(v).includes(person.name))) isBusy = true;
+                 Object.entries(s).forEach(([k, v]) => {
+                     if (['日期', '堂別'].includes(k)) return;
+                     if (v && typeof v === 'string') {
+                         const names = v.split(/,|、|，|\s+/).map(n => n.trim());
+                         if (names.includes(person.name)) isBusy = true;
+                     }
+                 });
               });
               if(isBusy) return;
 
@@ -739,10 +776,14 @@
                  if (getQuarterStr(rDateObj) !== targetQStr) return;
 
                  if(rDate === targetDateNorm || requesterBusyDates.has(rDate)) return;
+                 
                  let roleOnDay = null;
                  Object.entries(row).forEach(([k, v]) => {
                     if(['日期','堂別'].includes(k)) return;
-                    if(String(v).includes(person.name)) roleOnDay = k;
+                    if(v && typeof v === 'string') {
+                        const names = v.split(/,|、|，|\s+/).map(n => n.trim());
+                        if (names.includes(person.name)) roleOnDay = k;
+                    }
                  });
                  
                  if(roleOnDay && requester && requester.roles[roleOnDay]) {
@@ -754,7 +795,6 @@
                  }
               });
 
-              // 修改 stats: 改為使用本季服事次數
               potential.push({ ...person, swapOptions, stats: seasonStats[person.name] || 0 });
             });
 

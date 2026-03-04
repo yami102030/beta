@@ -167,6 +167,7 @@
           const [scheduleData, setScheduleData] = useState([]);
           const [peopleData, setPeopleData] = useState([]);
           const [statsData, setStatsData] = useState({});
+          const [rawData, setRawData] = useState(null); // 新增：保存原始資料，以便季別切換時重新計算
           
           const [isSyncing, setIsSyncing] = useState(true);
           const [syncStatus, setSyncStatus] = useState('');
@@ -174,6 +175,122 @@
           
           const [seasonType, setSeasonType] = useState(ENABLE_PRE_SCHEDULE ? 'next' : 'view'); 
           const seasonLabels = useMemo(() => getSeasonLabels(), []);
+
+          useEffect(() => {
+            const loadAllData = async () => {
+              setIsSyncing(true);
+              setProgress(10);
+
+              try {
+                // 1. 同步抓取 Supabase 四張資料表 + 季別設定表
+                const [
+                    { data: membersData, error: errM },
+                    { data: positionsData, error: errP },
+                    { data: memberPositionsData, error: errMP },
+                    { data: schedulesData, error: errS },
+                    { data: quarterSettingsData, error: errQS }
+                ] = await Promise.all([
+                    supabase.from('members').select('*'),
+                    supabase.from('positions').select('*'),
+                    supabase.from('member_positions').select('*'),
+                    supabase.from('schedules').select('*, members(name), positions(name)'),
+                    supabase.from('member_quarter_settings').select('*')
+                ]);
+
+                if (errM) throw errM;
+                if (errP) throw errP;
+                if (errMP) throw errMP;
+                if (errS) throw errS;
+
+                setProgress(50);
+                // 將原始資料存入 state，讓另一個 useEffect 能依據 seasonType 動態處理
+                setRawData({ membersData, positionsData, memberPositionsData, schedulesData, quarterSettingsData });
+              } catch (err) {
+                console.error("Supabase 同步失敗", err);
+                setSyncStatus('連線發生錯誤');
+                setTimeout(() => setIsSyncing(false), 500);
+              }
+            };
+            loadAllData();
+          }, []); // 唯獨一次向資料庫拉取
+
+          // 2. 當切換季別 (seasonType) 或取得新資料 (rawData) 時，重新計算人選狀態與班表
+          useEffect(() => {
+              if (!rawData) return;
+              const { membersData, positionsData, memberPositionsData, schedulesData, quarterSettingsData } = rawData;
+
+              const today = new Date();
+              today.setHours(0, 0, 0, 0);
+              const targetQStr = seasonType === 'view' 
+                  ? getQuarterStr(today) 
+                  : getQuarterStr(new Date(today.getFullYear(), today.getMonth() + 3, 1));
+
+              const transformedPeople = membersData.map(m => {
+                  const pRoles = {};
+                  const myPositions = memberPositionsData.filter(mp => mp.member_id === m.id);
+                  myPositions.forEach(mp => {
+                      const pos = positionsData.find(p => p.id === mp.position_id);
+                      if (pos) pRoles[pos.name.trim()] = "O";
+                  });
+
+                  // 核心修正：正確套用該季別的 member_quarter_settings (包含暫停服事、請假等)
+                  const qs = (quarterSettingsData || []).find(s => s.member_id === m.id && s.quarter === targetQStr);
+
+                  let unavail = '';
+                  if (qs?.unavailable_dates) {
+                      try {
+                          unavail = typeof qs.unavailable_dates === 'string' ? JSON.parse(qs.unavailable_dates).join(',') : qs.unavailable_dates.join(',');
+                      } catch(e) { unavail = qs.unavailable_dates; }
+                  } else if (m.unavailable_dates) {
+                      unavail = m.unavailable_dates.join(',');
+                  }
+
+                  return {
+                      id: m.id,
+                      name: m.name,
+                      session: qs?.preferred_session || m.preferred_session || '皆可',
+                      unavailable: unavail,
+                      willingness: qs?.availability_status || m.availability_status || '可排班',
+                      groupId: m.group_id || '',
+                      session2: parseInt(qs?.dual_service_pref ?? m.dual_service_pref ?? 0, 10) === 1 ? 'S1' : (parseInt(qs?.dual_service_pref ?? m.dual_service_pref ?? 0, 10) === 2 ? 'S2' : ''),
+                      roles: pRoles
+                  };
+              });
+              setPeopleData(transformedPeople);
+              setProgress(70);
+
+              const groupedSchedules = {};
+              const currentStats = {};
+
+              schedulesData.forEach(s => {
+                  const date = s.service_date;
+                  const session = s.session;
+                  const key = `${date}|${session}`;
+                  
+                  if (!groupedSchedules[key]) {
+                      groupedSchedules[key] = { '日期': date, '堂別': session };
+                  }
+                  
+                  const posName = s.positions?.name?.trim();
+                  const memberName = s.members?.name;
+                  
+                  if (posName && memberName) {
+                      if (groupedSchedules[key][posName]) {
+                          groupedSchedules[key][posName] += `、${memberName}`;
+                      } else {
+                          groupedSchedules[key][posName] = memberName;
+                      }
+                      currentStats[memberName] = (currentStats[memberName] || 0) + 1;
+                  }
+              });
+              
+              setScheduleData(Object.values(groupedSchedules));
+              setStatsData(currentStats);
+              
+              setProgress(100);
+              setSyncStatus('同步成功');
+              setTimeout(() => setIsSyncing(false), 500);
+          }, [rawData, seasonType]); 
 
           useEffect(() => {
             const loadAllData = async () => {
@@ -760,21 +877,26 @@
                   const rolesThisSession = mShiftsToday.filter(d => d.session === reqSession).map(d => d.role);
                   if (rolesThisSession.includes(initialRequest.role)) return;
 
-                  // 檢查堂別偏好 (若非皆可，且無二堂支援設定時，才嚴格過濾)
-                  if (person.session !== '皆可' && !person.session2) {
+                  // 修正：嚴格檢查堂別偏好 (若有二堂支援，視同第一堂+第二堂皆可)
+                  let pSession = String(person.session || '').trim();
+                  if (person.session2) {
+                      pSession += " 第一堂 第二堂 S1 S2"; 
+                  }
+
+                  if (!pSession.includes('皆可')) {
                       const isS1 = reqSession.includes('S1') || reqSession.includes('第一堂') || reqSession.includes('一堂');
                       const isS2 = reqSession.includes('S2') || reqSession.includes('第二堂') || reqSession.includes('二堂');
                       const isS3 = reqSession.includes('S3') || reqSession.includes('第三堂') || reqSession.includes('三堂');
 
-                      const pIsS1 = person.session.includes('S1') || person.session.includes('第一堂') || person.session.includes('一堂');
-                      const pIsS2 = person.session.includes('S2') || person.session.includes('第二堂') || person.session.includes('二堂');
-                      const pIsS3 = person.session.includes('S3') || person.session.includes('第三堂') || person.session.includes('三堂');
+                      const pIsS1 = pSession.includes('S1') || pSession.includes('第一堂') || pSession.includes('一堂');
+                      const pIsS2 = pSession.includes('S2') || pSession.includes('第二堂') || pSession.includes('二堂');
+                      const pIsS3 = pSession.includes('S3') || pSession.includes('第三堂') || pSession.includes('三堂');
 
                       let sessionMatch = false;
                       if (isS1 && pIsS1) sessionMatch = true;
                       if (isS2 && pIsS2) sessionMatch = true;
                       if (isS3 && pIsS3) sessionMatch = true;
-                      if (!isS1 && !isS2 && !isS3 && person.session.includes(reqSession)) sessionMatch = true;
+                      if (!isS1 && !isS2 && !isS3 && pSession.includes(reqSession)) sessionMatch = true;
 
                       if (!sessionMatch) return;
                   }

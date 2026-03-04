@@ -682,19 +682,23 @@
             const targetDateNorm = normalizeDateStr(initialRequest.date);
             const schedulesOnDate = scheduleData.filter(s => normalizeDateStr(s['日期']) === targetDateNorm);
             
-            // 修正：嚴格的名字比對陣列，避免把「林小明」誤判為「小明」忙碌
-            const requesterBusyDates = new Set();
+            const requester = peopleData.find(p => p.name === targetOwner);
+
+            // 預先整理原排班者 (Requester) 在本季的所有服事，用於精準判斷換班選項
+            const requesterShifts = [];
             scheduleData.forEach(row => {
+               const date = normalizeDateStr(row['日期']);
+               const session = row['堂別'];
                Object.entries(row).forEach(([k, v]) => {
                   if (['日期', '堂別'].includes(k)) return;
                   if (v && typeof v === 'string') {
                       const names = v.split(/,|、|，|\s+/).map(n => n.trim());
-                      if (names.includes(targetOwner)) requesterBusyDates.add(normalizeDateStr(row['日期']));
+                      if (names.includes(targetOwner)) {
+                          requesterShifts.push({ date, session, role: k });
+                      }
                   }
                });
             });
-
-            const requester = peopleData.find(p => p.name === targetOwner);
 
             const today = new Date();
             today.setHours(0, 0, 0, 0);
@@ -724,75 +728,110 @@
             let potential = [];
             peopleData.forEach(person => {
               if (person.name === targetOwner) return;
-              if (person.willingness.includes('休息') || person.willingness.includes('暫停')) return;
+              if (person.willingness.includes('休息') || person.willingness.includes('暫停') || person.willingness.includes('安息季')) return;
               if (!person.roles[initialRequest.role]) return;
-              
-              // 修正：強化堂別判斷。預排時堂別可能尚未填寫（undefined / null / 空白），不應直接濾掉所有人
-              const reqSession = String(initialRequest.session || '').trim();
-              const pSession = String(person.session || '').trim() + " " + String(person.session2 || '').trim();
-              
-              if (initialRequest.role !== '執事輪值' && reqSession && reqSession !== 'null' && reqSession !== 'undefined') {
-                  const isS1 = reqSession.includes('S1') || reqSession.includes('第一堂') || reqSession.includes('一堂');
-                  const isS2 = reqSession.includes('S2') || reqSession.includes('第二堂') || reqSession.includes('二堂');
-                  const isS3 = reqSession.includes('S3') || reqSession.includes('第三堂') || reqSession.includes('三堂');
 
-                  const pIsS1 = pSession.includes('S1') || pSession.includes('第一堂') || pSession.includes('一堂');
-                  const pIsS2 = pSession.includes('S2') || pSession.includes('第二堂') || pSession.includes('二堂');
-                  const pIsS3 = pSession.includes('S3') || pSession.includes('第三堂') || pSession.includes('三堂');
-
-                  const sessionMatch = 
-                      pSession.includes('皆可') || 
-                      (isS1 && pIsS1) || 
-                      (isS2 && pIsS2) || 
-                      (isS3 && pIsS3) || 
-                      (!isS1 && !isS2 && !isS3 && pSession.includes(reqSession)); // 保底直接比對字串
-                  
-                  if (!sessionMatch) return;
-              }
+              // 排除當天請假的同工
+              const unavailDates = person.unavailable ? person.unavailable.split(',').map(d => normalizeDateStr(d.trim())) : [];
+              if (unavailDates.includes(targetDateNorm)) return;
               
-              // 修正：精準比對當天忙碌狀態，防止姓名子字串衝突（例：王力 與 王力宏）
-              let isBusy = false;
+              // 取得候選人當天已經被排的所有班次
+              const mShiftsToday = [];
               schedulesOnDate.forEach(s => {
                  Object.entries(s).forEach(([k, v]) => {
                      if (['日期', '堂別'].includes(k)) return;
                      if (v && typeof v === 'string') {
                          const names = v.split(/,|、|，|\s+/).map(n => n.trim());
-                         if (names.includes(person.name)) isBusy = true;
+                         if (names.includes(person.name)) {
+                             mShiftsToday.push({ role: k, session: s['堂別'] });
+                         }
                      }
                  });
               });
-              if(isBusy) return;
+
+              const reqSession = String(initialRequest.session || '').trim();
+              
+              // 推薦資格邏輯完全對齊預排系統 (Admin)
+              if (initialRequest.role === '執事輪值') {
+                  // 如果候選人當天已經是執事，則不推薦
+                  if (mShiftsToday.some(d => d.role === '執事輪值')) return;
+              } else {
+                  // 檢查候選人是否在該堂別已經擔任了同一個崗位
+                  const rolesThisSession = mShiftsToday.filter(d => d.session === reqSession).map(d => d.role);
+                  if (rolesThisSession.includes(initialRequest.role)) return;
+
+                  // 檢查堂別偏好 (若非皆可，且無二堂支援設定時，才嚴格過濾)
+                  if (person.session !== '皆可' && !person.session2) {
+                      const isS1 = reqSession.includes('S1') || reqSession.includes('第一堂') || reqSession.includes('一堂');
+                      const isS2 = reqSession.includes('S2') || reqSession.includes('第二堂') || reqSession.includes('二堂');
+                      const isS3 = reqSession.includes('S3') || reqSession.includes('第三堂') || reqSession.includes('三堂');
+
+                      const pIsS1 = person.session.includes('S1') || person.session.includes('第一堂') || person.session.includes('一堂');
+                      const pIsS2 = person.session.includes('S2') || person.session.includes('第二堂') || person.session.includes('二堂');
+                      const pIsS3 = person.session.includes('S3') || person.session.includes('第三堂') || person.session.includes('三堂');
+
+                      let sessionMatch = false;
+                      if (isS1 && pIsS1) sessionMatch = true;
+                      if (isS2 && pIsS2) sessionMatch = true;
+                      if (isS3 && pIsS3) sessionMatch = true;
+                      if (!isS1 && !isS2 && !isS3 && person.session.includes(reqSession)) sessionMatch = true;
+
+                      if (!sessionMatch) return;
+                  }
+              }
 
               const swapOptions = [];
               const addedSwaps = new Set();
+              const processedDeaconDates = new Set();
 
               scheduleData.forEach(row => {
                  const rDate = normalizeDateStr(row['日期']);
                  const rDateObj = parseDateObj(row['日期']);
+                 const rSession = row['堂別'];
                  
                  if(rDateObj < today) return;
-
                  // 過濾掉非目標季別的換班選項
                  if (getQuarterStr(rDateObj) !== targetQStr) return;
-
-                 if(rDate === targetDateNorm || requesterBusyDates.has(rDate)) return;
+                 // 不能與當天互換
+                 if(rDate === targetDateNorm) return;
                  
-                 let roleOnDay = null;
                  Object.entries(row).forEach(([k, v]) => {
                     if(['日期','堂別'].includes(k)) return;
                     if(v && typeof v === 'string') {
                         const names = v.split(/,|、|，|\s+/).map(n => n.trim());
-                        if (names.includes(person.name)) roleOnDay = k;
+                        if (names.includes(person.name)) {
+                            const shiftRole = k;
+                            
+                            // 換班對象 (原排班者 targetOwner) 必須具備該崗位資格
+                            if (!requester || !requester.roles[shiftRole]) return;
+
+                            if (shiftRole === '執事輪值') {
+                                if (processedDeaconDates.has(rDate)) return;
+                                processedDeaconDates.add(rDate);
+
+                                // 檢查原排班者是否當天已經是執事
+                                const reqRolesToday = requesterShifts.filter(s => s.date === rDate).map(s => s.role);
+                                if (reqRolesToday.includes('執事輪值')) return;
+
+                                const uniqueKey = `${rDate}_${shiftRole}`;
+                                if (!addedSwaps.has(uniqueKey)) {
+                                    swapOptions.push({ date: rDate, role: shiftRole, session: '第一堂、第二堂' });
+                                    addedSwaps.add(uniqueKey);
+                                }
+                            } else {
+                                // 檢查原排班者是否在該堂已經有此崗位
+                                const reqRolesThisSession = requesterShifts.filter(s => s.date === rDate && s.session === rSession).map(s => s.role);
+                                if (reqRolesThisSession.includes(shiftRole)) return;
+
+                                const uniqueKey = `${rDate}_${rSession}_${shiftRole}`;
+                                if (!addedSwaps.has(uniqueKey)) {
+                                    swapOptions.push({ date: rDate, role: shiftRole, session: rSession });
+                                    addedSwaps.add(uniqueKey);
+                                }
+                            }
+                        }
                     }
                  });
-                 
-                 if(roleOnDay && requester && requester.roles[roleOnDay]) {
-                     const uniqueKey = `${rDate}_${roleOnDay}`;
-                     if (!addedSwaps.has(uniqueKey)) {
-                        swapOptions.push({ date: rDate, role: roleOnDay });
-                        addedSwaps.add(uniqueKey);
-                     }
-                 }
               });
 
               potential.push({ ...person, swapOptions, stats: seasonStats[person.name] || 0 });
@@ -875,7 +914,7 @@
                                   {person.swapOptions.map((swap, i) => (
                                     <div key={i} className="text-xs bg-indigo-50 text-indigo-600 px-3 py-1.5 rounded-lg border border-indigo-100 flex items-center gap-1">
                                       <span className="font-bold">{swap.date}</span>
-                                      <span className="text-[10px] opacity-70">({swap.role})</span>
+                                      <span className="text-[10px] opacity-70">({swap.role} • {swap.session})</span>
                                     </div>
                                   ))}
                                 </div>

@@ -293,97 +293,6 @@
           }, [rawData, seasonType]); 
 
           useEffect(() => {
-            const loadAllData = async () => {
-              setIsSyncing(true);
-              setProgress(10);
-
-              try {
-                // 1. 同步抓取 Supabase 四張資料表
-                const [
-                    { data: membersData, error: errM },
-                    { data: positionsData, error: errP },
-                    { data: memberPositionsData, error: errMP },
-                    { data: schedulesData, error: errS }
-                ] = await Promise.all([
-                    supabase.from('members').select('*'),
-                    supabase.from('positions').select('*'),
-                    supabase.from('member_positions').select('*'),
-                    supabase.from('schedules').select('*, members(name), positions(name)')
-                ]);
-
-                if (errM) throw errM;
-                if (errP) throw errP;
-                if (errMP) throw errMP;
-                if (errS) throw errS;
-
-                setProgress(50);
-
-                // 2. 轉換 members 成為前端需要的格式 (peopleData)
-                const transformedPeople = membersData.map(m => {
-                    const pRoles = {};
-                    const myPositions = memberPositionsData.filter(mp => mp.member_id === m.id);
-                    myPositions.forEach(mp => {
-                        const pos = positionsData.find(p => p.id === mp.position_id);
-                        if (pos) pRoles[pos.name.trim()] = "O";
-                    });
-
-                    return {
-                        name: m.name,
-                        session: m.preferred_session || '皆可',
-                        unavailable: m.unavailable_dates ? m.unavailable_dates.join(',') : '',
-                        willingness: m.availability_status || '',
-                        groupId: m.group_id || '',
-                        session2: m.dual_service_pref === 1 ? 'S1' : (m.dual_service_pref === 2 ? 'S2' : ''),
-                        roles: pRoles
-                    };
-                });
-                setPeopleData(transformedPeople);
-                setProgress(70);
-
-                // 3. 轉換 schedules 成為前端需要的橫向格式 (scheduleData)，並統計次數
-                const groupedSchedules = {};
-                const currentStats = {};
-
-                schedulesData.forEach(s => {
-                    const date = s.service_date;
-                    const session = s.session;
-                    const key = `${date}|${session}`;
-                    
-                    if (!groupedSchedules[key]) {
-                        groupedSchedules[key] = { '日期': date, '堂別': session };
-                    }
-                    
-                    const posName = s.positions?.name?.trim();
-                    const memberName = s.members?.name;
-                    
-                    if (posName && memberName) {
-                        // 如果該崗位已經有人，用「、」串接起來（還原舊系統結構）
-                        if (groupedSchedules[key][posName]) {
-                            groupedSchedules[key][posName] += `、${memberName}`;
-                        } else {
-                            groupedSchedules[key][posName] = memberName;
-                        }
-                        // 累積統計資料
-                        currentStats[memberName] = (currentStats[memberName] || 0) + 1;
-                    }
-                });
-                
-                setScheduleData(Object.values(groupedSchedules));
-                setStatsData(currentStats);
-                
-                setProgress(100);
-                setSyncStatus('同步成功');
-              } catch (err) {
-                console.error("Supabase 同步失敗", err);
-                setSyncStatus('連線發生錯誤');
-              } finally {
-                setTimeout(() => setIsSyncing(false), 500);
-              }
-            };
-            loadAllData();
-          }, []); // 只需在載入時抓取一次完整資料庫
-
-          useEffect(() => {
             if (!savedUser && currentView === 'login') {
                 const retrySavedUser = getLocalData('tbc_user');
                 if (retrySavedUser) {
@@ -845,7 +754,7 @@
             let potential = [];
             peopleData.forEach(person => {
               if (person.name === targetOwner) return;
-              if (person.willingness.includes('休息') || person.willingness.includes('暫停') || person.willingness.includes('安息季')) return;
+              if (person.willingness && (person.willingness.includes('休息') || person.willingness.includes('暫停') || person.willingness.includes('安息季'))) return;
               if (!person.roles[initialRequest.role]) return;
 
               // 排除當天請假的同工
@@ -877,13 +786,11 @@
                   const rolesThisSession = mShiftsToday.filter(d => d.session === reqSession).map(d => d.role);
                   if (rolesThisSession.includes(initialRequest.role)) return;
 
-                  // 修正：嚴格檢查堂別偏好 (若有二堂支援，視同第一堂+第二堂皆可)
-                  let pSession = String(person.session || '').trim();
-                  if (person.session2) {
-                      pSession += " 第一堂 第二堂 S1 S2"; 
-                  }
+                  // 修正：嚴格檢查堂別偏好 (若非皆可，且無二堂支援設定時，才嚴格過濾)
+                  const pSession = String(person.session || '').trim();
+                  const hasDualService = Boolean(person.session2);
 
-                  if (!pSession.includes('皆可')) {
+                  if (!pSession.includes('皆可') && !hasDualService) {
                       const isS1 = reqSession.includes('S1') || reqSession.includes('第一堂') || reqSession.includes('一堂');
                       const isS2 = reqSession.includes('S2') || reqSession.includes('第二堂') || reqSession.includes('二堂');
                       const isS3 = reqSession.includes('S3') || reqSession.includes('第三堂') || reqSession.includes('三堂');

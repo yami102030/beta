@@ -227,22 +227,46 @@
 
               const transformedPeople = membersData.map(m => {
                   const pRoles = {};
-                  const myPositions = memberPositionsData.filter(mp => mp.member_id === m.id);
-                  myPositions.forEach(mp => {
-                      const pos = positionsData.find(p => p.id === mp.position_id);
-                      if (pos) pRoles[pos.name.trim()] = "O";
+                  
+                  // 修正：處理季別覆蓋邏輯 (特定季別「暫停崗位」必須覆蓋全域的「啟用崗位」)
+                  const posMap = new Map();
+                  
+                  // 先過濾出該同工所有的崗位設定
+                  const allMyPos = memberPositionsData.filter(mp => mp.member_id === m.id);
+                  
+                  allMyPos.forEach(mp => {
+                      // 只處理「全域(無季別)」或「目標季別」的紀錄
+                      if (!mp.quarter || mp.quarter === targetQStr) {
+                          const existing = posMap.get(mp.position_id);
+                          // 若還沒有加入，或是這筆紀錄是明確針對目標季別的 (權重最高，覆蓋全域)，則寫入
+                          if (!existing || mp.quarter === targetQStr) {
+                              posMap.set(mp.position_id, mp);
+                          }
+                      }
+                  });
+                  
+                  posMap.forEach((mp, posId) => {
+                      // 檢查最終決定的這筆紀錄是否為啟用狀態 (防呆處理各種 false 的資料型態)
+                      const isActive = mp.is_active !== false && mp.is_active !== 0 && String(mp.is_active).toLowerCase() !== 'false';
+                      if (isActive) {
+                          const pos = positionsData.find(p => p.id === posId);
+                          if (pos) pRoles[pos.name.trim()] = "O";
+                      }
                   });
 
-                  // 核心修正：正確套用該季別的 member_quarter_settings (包含暫停服事、請假等)
+                  // 正確套用該季別的 member_quarter_settings (包含暫停服事、請假等)
                   const qs = (quarterSettingsData || []).find(s => s.member_id === m.id && s.quarter === targetQStr);
 
+                  // 強化請假日期的 JSON 解析，避免格式錯誤導致未被過濾
                   let unavail = '';
                   if (qs?.unavailable_dates) {
                       try {
                           unavail = typeof qs.unavailable_dates === 'string' ? JSON.parse(qs.unavailable_dates).join(',') : qs.unavailable_dates.join(',');
                       } catch(e) { unavail = qs.unavailable_dates; }
                   } else if (m.unavailable_dates) {
-                      unavail = m.unavailable_dates.join(',');
+                      try {
+                          unavail = typeof m.unavailable_dates === 'string' ? JSON.parse(m.unavailable_dates).join(',') : m.unavailable_dates.join(',');
+                      } catch(e) { unavail = m.unavailable_dates; }
                   }
 
                   return {

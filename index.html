@@ -709,24 +709,6 @@
             const targetDateNorm = normalizeDateStr(initialRequest.date);
             const schedulesOnDate = scheduleData.filter(s => normalizeDateStr(s['日期']) === targetDateNorm);
             
-            const requester = peopleData.find(p => p.name === targetOwner);
-
-            // 預先整理原排班者 (Requester) 在本季的所有服事，用於精準判斷換班選項
-            const requesterShifts = [];
-            scheduleData.forEach(row => {
-               const date = normalizeDateStr(row['日期']);
-               const session = row['堂別'];
-               Object.entries(row).forEach(([k, v]) => {
-                  if (['日期', '堂別'].includes(k)) return;
-                  if (v && typeof v === 'string') {
-                      const names = v.split(/,|、|，|\s+/).map(n => n.trim());
-                      if (names.includes(targetOwner)) {
-                          requesterShifts.push({ date, session, role: k });
-                      }
-                  }
-               });
-            });
-
             const today = new Date();
             today.setHours(0, 0, 0, 0);
 
@@ -743,7 +725,7 @@
                     Object.entries(row).forEach(([k, v]) => {
                         if (['日期', '堂別'].includes(k)) return;
                         if (v && typeof v === 'string') {
-                            const names = String(v).split(/,|、|，|\s+/).map(n => n.trim()).filter(n => n);
+                            const names = extractNames(v);
                             names.forEach(n => {
                                 seasonStats[n] = (seasonStats[n] || 0) + 1;
                             });
@@ -755,10 +737,15 @@
             let potential = [];
             peopleData.forEach(person => {
               if (person.name === targetOwner) return;
-              if (person.willingness && (person.willingness.includes('休息') || person.willingness.includes('暫停') || person.willingness.includes('安息季'))) return;
+              
+              // 1. 服事意願檢查 (完全對齊 Admin)
+              const status = (person.willingness || '').trim();
+              if (status === '暫停服事' || status === '安息季') return;
+              
+              // 2. 崗位資格檢查
               if (!person.roles[initialRequest.role]) return;
 
-              // 排除當天請假的同工
+              // 3. 排除當天請假的同工
               const unavailDates = person.unavailable ? person.unavailable.split(',').map(d => normalizeDateStr(d.trim())) : [];
               if (unavailDates.includes(targetDateNorm)) return;
               
@@ -768,7 +755,7 @@
                  Object.entries(s).forEach(([k, v]) => {
                      if (['日期', '堂別'].includes(k)) return;
                      if (v && typeof v === 'string') {
-                         const names = v.split(/,|、|，|\/|\s+/).map(n => n.trim()).filter(n => n);
+                         const names = extractNames(v);
                          if (names.includes(person.name)) {
                              mShiftsToday.push({ role: k, session: s['堂別'] });
                          }
@@ -779,7 +766,7 @@
               const reqSession = String(initialRequest.session || '').trim();
               const activeRole = initialRequest.role;
               
-              // 推薦資格邏輯【完全 1:1 對齊 TBC Serve Manager 智慧推薦面板】
+              // 4. 推薦資格邏輯【完全 1:1 對齊 TBC Serve Manager 智慧推薦面板】
               if (activeRole === '執事輪值') {
                   if (mShiftsToday.some(d => d.role === '執事輪值')) return;
               } else {
@@ -808,65 +795,8 @@
                   }
               }
 
-              const swapOptions = [];
-              const addedSwaps = new Set();
-              const processedDeaconDates = new Set();
-
-              // 取得原排班者的請假日期
-              const requesterUnavailDates = requester?.unavailable ? requester.unavailable.split(',').map(d => normalizeDateStr(d.trim())) : [];
-
-              scheduleData.forEach(row => {
-                 const rDate = normalizeDateStr(row['日期']);
-                 const rDateObj = parseDateObj(row['日期']);
-                 const rSession = row['堂別'];
-                 
-                 if(rDateObj < today) return;
-                 // 過濾掉非目標季別的換班選項
-                 if (getQuarterStr(rDateObj) !== targetQStr) return;
-                 // 不能與當天互換
-                 if(rDate === targetDateNorm) return;
-                 
-                 // 如果要換過去的那天，原排班者有請假，則不能互換
-                 if (requesterUnavailDates.includes(rDate)) return;
-                 
-                 Object.entries(row).forEach(([k, v]) => {
-                    if(['日期','堂別'].includes(k)) return;
-                    if(v && typeof v === 'string') {
-                        const names = v.split(/,|、|，|\/|\s+/).map(n => n.trim()).filter(n => n);
-                        if (names.includes(person.name)) {
-                            const shiftRole = k;
-                            
-                            // 換班對象 (原排班者 targetOwner) 必須具備該崗位資格
-                            if (!requester || !requester.roles[shiftRole]) return;
-
-                            if (shiftRole === '執事輪值') {
-                                if (processedDeaconDates.has(rDate)) return;
-                                processedDeaconDates.add(rDate);
-
-                                const reqRolesToday = requesterShifts.filter(s => s.date === rDate).map(s => s.role);
-                                if (reqRolesToday.includes('執事輪值')) return;
-
-                                const uniqueKey = `${rDate}_${shiftRole}`;
-                                if (!addedSwaps.has(uniqueKey)) {
-                                    swapOptions.push({ date: rDate, role: shiftRole, session: '第一堂、第二堂' });
-                                    addedSwaps.add(uniqueKey);
-                                }
-                            } else {
-                                const reqRolesThisSession = requesterShifts.filter(s => s.date === rDate && s.session === rSession).map(s => s.role);
-                                if (reqRolesThisSession.includes(shiftRole)) return;
-
-                                const uniqueKey = `${rDate}_${rSession}_${shiftRole}`;
-                                if (!addedSwaps.has(uniqueKey)) {
-                                    swapOptions.push({ date: rDate, role: shiftRole, session: rSession });
-                                    addedSwaps.add(uniqueKey);
-                                }
-                            }
-                        }
-                    }
-                 });
-              });
-
-              potential.push({ ...person, swapOptions, stats: seasonStats[person.name] || 0 });
+              // 符合所有資格，加入推薦名單
+              potential.push({ ...person, stats: seasonStats[person.name] || 0 });
             });
 
             potential.sort((a, b) => a.stats - b.stats);
@@ -902,7 +832,7 @@
                   <div className="space-y-4 animate-in fade-in">
                     <div className="flex items-center justify-between px-2">
                       <h3 className="font-black text-slate-700 flex items-center gap-2"><UserCheck className="text-emerald-500" /> 推薦人選 ({candidates.length})</h3>
-                      <span className="text-[10px] bg-slate-200 text-slate-500 px-2 py-1 rounded">依本季次數排序</span>
+                      <span className="text-[10px] bg-slate-200 text-slate-500 px-2 py-1 rounded font-bold">依本季次數排序</span>
                     </div>
                     {candidates.length > 0 ? (
                       candidates.map((person, idx) => (
@@ -913,23 +843,16 @@
                                 <div>
                                   <div className="flex items-center gap-2">
                                     <p className="text-xl font-black text-slate-800">{person.name}</p>
-                                    {person.swapOptions.length > 0 ? (
-                                      <span className="flex items-center gap-1 text-[10px] font-bold bg-indigo-50 text-indigo-600 px-2 py-0.5 rounded-full border border-indigo-100">
-                                         <span className="text-xs">⇄</span> 換班
-                                      </span>
-                                    ) : (
-                                      <span className="flex items-center gap-1 text-[10px] font-bold bg-orange-50 text-orange-600 px-2 py-0.5 rounded-full border border-orange-100"><HandHeart size={10} /> 替補</span>
-                                    )}
                                   </div>
-                                  <div className="flex items-center gap-1 text-xs font-bold text-slate-400 mt-1">
+                                  <div className="flex items-center gap-1 text-xs font-bold text-slate-400 mt-1 flex-wrap">
                                     <span className="bg-slate-100 px-1.5 py-0.5 rounded">{person.session}</span>
                                     <span>•</span>
                                     <span>本季服事 {person.stats} 次</span>
                                     
-                                    {person.groupId.includes('FA') && (
+                                    {person.groupId && person.groupId.includes('FA') && (
                                         <span className="ml-1 px-1.5 h-5 rounded-[4px] bg-slate-400 text-white flex items-center justify-center text-[10px] font-bold" title="群組: FA">FA</span>
                                     )}
-                                    {person.groupId.includes('FB') && (
+                                    {person.groupId && person.groupId.includes('FB') && (
                                         <span className="ml-1 px-1.5 h-5 rounded-[4px] bg-slate-400 text-white flex items-center justify-center text-[10px] font-bold" title="群組: FB">FB</span>
                                     )}
                                     {person.session2 && (
@@ -939,30 +862,13 @@
                                 </div>
                               </div>
                             </div>
-                            {person.swapOptions.length > 0 ? (
-                              <div className="mt-4 pt-3 border-t border-slate-50">
-                                <p className="text-[10px] font-bold text-slate-400 mb-2 flex items-center gap-1"><RefreshCw size={10} /> 雙方可以換班日期 (互換班次)：</p>
-                                <div className="flex flex-wrap gap-2">
-                                  {person.swapOptions.map((swap, i) => (
-                                    <div key={i} className="text-xs bg-indigo-50 text-indigo-600 px-3 py-1.5 rounded-lg border border-indigo-100 flex items-center gap-1">
-                                      <span className="font-bold">{swap.date}</span>
-                                      <span className="text-[10px] opacity-70">({swap.role} • {swap.session})</span>
-                                    </div>
-                                  ))}
-                                </div>
-                              </div>
-                            ) : (
-                              <div className="mt-4 pt-3 border-t border-slate-50">
-                                <p className="text-[10px] font-bold text-slate-400 flex items-center gap-1">
-                                    <Info size={10} /> 無班可換，可請求支援
-                                </p>
-                              </div>
-                            )}
                           </div>
                       ))
                     ) : (
                       <div className="p-10 text-center text-slate-400 bg-white rounded-2xl border border-dashed border-slate-200">
-                        <UserX className="mx-auto mb-4 opacity-30" size={48} /><p>找不到人選</p>
+                        <UserX className="mx-auto mb-4 opacity-30" size={48} />
+                        <p className="font-bold">找不到合適人選</p>
+                        <p className="text-[10px] mt-2">同工可能已請假、暫停服事，或不符合兼任條件</p>
                       </div>
                     )}
                   </div>

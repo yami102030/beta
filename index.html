@@ -527,9 +527,9 @@
               if (!dateStr) return;
               const dateObj = parseDateObj(row['日期']);
 
-              // Supabase 版本中，可以自行決定是否要顯示過去歷史
-              // 這裡保留你原本的邏輯：只顯示今天之後的班表
-              if (dateObj < today) return;
+              // 核心修正 1：移除「過去日期不顯示」的限制。
+              // 改為計算是否為過去日期，並在 UI 上標示「已完成」，以免同工以為資料遺失。
+              const isPast = dateObj < today;
 
               // 過濾掉非目標季別的資料
               if (getQuarterStr(dateObj) !== targetQStr) return;
@@ -539,14 +539,17 @@
               Object.entries(row).forEach(([key, val]) => {
                 if (['堂別', '日期'].includes(key)) return;
                 const cellValue = String(val || '');
-                if (cellValue.includes(searchName)) {
+                
+                // 核心修正 2：精確比對姓名，避免子字串誤判
+                const names = cellValue.split(/,|、|，|\s+/).map(n => n.trim()).filter(n => n);
+                
+                if (names.includes(searchName)) {
                    let shiftNumber = null;
                    if (numberedRoles.includes(key)) {
-                       const names = cellValue.split(/,|、|，|\s+/).map(n => n.trim()).filter(n => n);
                        const idx = names.indexOf(searchName);
                        if (idx !== -1) shiftNumber = idx + 1;
                    }
-                   tempShifts.push({ date: dateStr, dateObj, role: key, shiftNumber, session, rawSession: session });
+                   tempShifts.push({ date: dateStr, dateObj, role: key, shiftNumber, session, rawSession: session, isPast });
                 }
               });
             });
@@ -563,6 +566,7 @@
             setFlatShifts(Array.from(shiftsMap.values()).sort((a, b) => a.dateObj - b.dateObj));
           }, [name, scheduleData, seasonType]); 
 
+          // 恢復為直接開啟 Google Calendar 網頁連結
           const addToGoogleCalendar = (shift) => {
              const year = shift.dateObj.getFullYear();
              const month = String(shift.dateObj.getMonth() + 1).padStart(2, '0');
@@ -659,7 +663,7 @@
                       const rConfig = ROLE_CONFIG[shift.role] || ROLE_CONFIG['預設'];
                       const textColorClass = rConfig.color.split(' ')[1] || 'text-slate-800';
                       return (
-                        <div key={index} className="bg-white rounded-[1.5rem] p-5 shadow-sm border border-slate-200 flex items-center justify-between gap-4 animate-in fade-in transition-transform hover:scale-[1.01]" style={{animationDelay: `${index * 50}ms`}}>
+                        <div key={index} className={`bg-white rounded-[1.5rem] p-5 shadow-sm border ${shift.isPast ? 'border-slate-100 opacity-60 bg-slate-50/50' : 'border-slate-200'} flex items-center justify-between gap-4 animate-in fade-in transition-transform hover:scale-[1.01]`} style={{animationDelay: `${index * 50}ms`}}>
                           <div className="flex flex-col gap-1 flex-grow">
                              <span className={`text-xl font-black tracking-tight leading-tight ${textColorClass} flex items-center gap-2`}>
                                {shift.role}
@@ -672,14 +676,18 @@
                           </div>
                           
                           <div className="flex flex-col gap-2">
-                              {seasonType === 'view' && (
+                              {seasonType === 'view' && !shift.isPast && (
                                 <button onClick={() => addToGoogleCalendar(shift)} className="bg-white hover:bg-blue-50 text-blue-600 px-3 py-1.5 rounded-lg transition-all active:scale-95 border border-blue-200 flex-shrink-0 shadow-sm text-xs font-bold text-center whitespace-nowrap">
                                     加入行事曆
                                 </button>
                               )}
-                              <button onClick={() => onRequestSwap({ date: shift.date, role: shift.role, session: shift.rawSession, owner: name })} className="bg-white hover:bg-emerald-50 text-emerald-600 px-3 py-1.5 rounded-lg transition-all active:scale-95 border border-emerald-200 flex-shrink-0 shadow-sm text-xs font-bold text-center whitespace-nowrap">
-                                換班查詢
-                              </button>
+                              {!shift.isPast ? (
+                                  <button onClick={() => onRequestSwap({ date: shift.date, role: shift.role, session: shift.rawSession, owner: name })} className="bg-white hover:bg-emerald-50 text-emerald-600 px-3 py-1.5 rounded-lg transition-all active:scale-95 border border-emerald-200 flex-shrink-0 shadow-sm text-xs font-bold text-center whitespace-nowrap">
+                                    換班查詢
+                                  </button>
+                              ) : (
+                                  <span className="text-xs font-bold text-slate-400 bg-slate-100 px-3 py-1.5 rounded-lg text-center whitespace-nowrap">已完成</span>
+                              )}
                           </div>
                         </div>
                       );

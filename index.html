@@ -768,7 +768,7 @@
                  Object.entries(s).forEach(([k, v]) => {
                      if (['日期', '堂別'].includes(k)) return;
                      if (v && typeof v === 'string') {
-                         const names = v.split(/,|、|，|\s+/).map(n => n.trim());
+                         const names = v.split(/,|、|，|\/|\s+/).map(n => n.trim()).filter(n => n);
                          if (names.includes(person.name)) {
                              mShiftsToday.push({ role: k, session: s['堂別'] });
                          }
@@ -778,42 +778,32 @@
 
               const reqSession = String(initialRequest.session || '').trim();
               const activeRole = initialRequest.role;
-              const compatibleRoles = ['接待', '收奉獻', '主餐', '新朋友關懷'];
               
-              // 推薦資格邏輯【完全 1:1 對齊】預排系統 (Admin) 的嚴格判斷
+              // 推薦資格邏輯【完全 1:1 對齊 TBC Serve Manager 智慧推薦面板】
               if (activeRole === '執事輪值') {
                   if (mShiftsToday.some(d => d.role === '執事輪值')) return;
               } else {
-                  // 1. 檢查同一堂次的兼任相容性
                   const shiftsThisSession = mShiftsToday.filter(d => d.session === reqSession);
                   if (shiftsThisSession.length > 0) {
-                      const allExistingAreConcurrent = shiftsThisSession.every(d => compatibleRoles.includes(d.role));
-                      const isActiveConcurrent = compatibleRoles.includes(activeRole);
-
-                      if (!allExistingAreConcurrent || !isActiveConcurrent) {
-                          return; // 只要有一個不是四大相容崗位，就不能排
-                      }
-
-                      if (shiftsThisSession.some(d => d.role === activeRole)) {
-                          return; // 防呆：不能在同一堂重複接同一個崗位
-                      }
+                      const concurrentRoles = ['接待', '收奉獻', '主餐', '新朋友關懷'];
+                      const allExistingAreConcurrent = shiftsThisSession.every(d => concurrentRoles.includes(d.role));
+                      const isActiveConcurrent = concurrentRoles.includes(activeRole);
+                      
+                      if (!allExistingAreConcurrent || !isActiveConcurrent) return;
+                      if (shiftsThisSession.some(d => d.role === activeRole)) return;
                   }
-
-                  // 2. 檢查另一堂次的二堂支援規則
+                  
                   const shiftsOtherSession = mShiftsToday.filter(d => d.session !== reqSession);
-                  const dualPref = person.session2 === '二堂同崗' ? 1 : (person.session2 === '二堂異崗' ? 2 : 0);
-
+                  const dualPref = person.rawDualPref || 0; // 取得原始數字型態的二堂支援設定
+                  
                   if (shiftsOtherSession.length > 0) {
-                      if (dualPref === 0) return; // 偏好單堂服事者，不推薦接第二堂
-
+                      if (dualPref === 0) return;
                       const otherRoles = shiftsOtherSession.map(d => d.role);
-                      if (dualPref === 1 && !otherRoles.includes(activeRole)) return; // 偏好同崗，但新崗位不同
-                      if (dualPref === 2 && otherRoles.includes(activeRole)) return;  // 偏好異崗，但新崗位相同
+                      if (dualPref === 1 && !otherRoles.includes(activeRole)) return;
+                      if (dualPref === 2 && otherRoles.includes(activeRole)) return;
                   } else {
-                      // 3. 沒有跨堂服事時，嚴格檢查堂別偏好
-                      const pSession = String(person.session || '').trim();
-                      if (dualPref === 0 && pSession && !pSession.includes('皆可')) {
-                          if (!pSession.includes(reqSession.replace('堂', ''))) return;
+                      if (dualPref === 0 && person.session && person.session !== '皆可') {
+                          if (!person.session.includes(reqSession.replace('堂', ''))) return;
                       }
                   }
               }
@@ -842,22 +832,19 @@
                  Object.entries(row).forEach(([k, v]) => {
                     if(['日期','堂別'].includes(k)) return;
                     if(v && typeof v === 'string') {
-                        const names = v.split(/,|、|，|\s+/).map(n => n.trim());
+                        const names = v.split(/,|、|，|\/|\s+/).map(n => n.trim()).filter(n => n);
                         if (names.includes(person.name)) {
                             const shiftRole = k;
                             
                             // 換班對象 (原排班者 targetOwner) 必須具備該崗位資格
                             if (!requester || !requester.roles[shiftRole]) return;
 
-                            // 取出原排班者在那一天的所有服事
-                            const reqShiftsToday = requesterShifts.filter(s => s.date === rDate);
-
                             if (shiftRole === '執事輪值') {
                                 if (processedDeaconDates.has(rDate)) return;
                                 processedDeaconDates.add(rDate);
 
-                                // 檢查原排班者是否當天已經有其他服事
-                                if (reqShiftsToday.length > 0) return;
+                                const reqRolesToday = requesterShifts.filter(s => s.date === rDate).map(s => s.role);
+                                if (reqRolesToday.includes('執事輪值')) return;
 
                                 const uniqueKey = `${rDate}_${shiftRole}`;
                                 if (!addedSwaps.has(uniqueKey)) {
@@ -865,23 +852,8 @@
                                     addedSwaps.add(uniqueKey);
                                 }
                             } else {
-                                // 檢查原排班者是否在該堂已經有此崗位
-                                const reqRolesThisSession = reqShiftsToday.filter(s => s.session === rSession).map(s => s.role);
+                                const reqRolesThisSession = requesterShifts.filter(s => s.date === rDate && s.session === rSession).map(s => s.role);
                                 if (reqRolesThisSession.includes(shiftRole)) return;
-                                
-                                // 加入原排班者接下此班的兼任/防呆判斷
-                                if (reqShiftsToday.length > 0) {
-                                    if (reqShiftsToday.length >= 2) return;
-                                    if (reqShiftsToday.some(s => s.role === '執事輪值')) return;
-                                    
-                                    const isReqAllSameSession = reqShiftsToday.every(s => s.session === rSession);
-                                    if (isReqAllSameSession) {
-                                        // 檢查是否符合同堂兼任條件
-                                        const isReqRequestCompatible = compatibleRoles.includes(shiftRole);
-                                        const areReqExistingCompatible = reqRolesThisSession.every(r => compatibleRoles.includes(r));
-                                        if (!(isReqRequestCompatible && areReqExistingCompatible)) return;
-                                    }
-                                }
 
                                 const uniqueKey = `${rDate}_${rSession}_${shiftRole}`;
                                 if (!addedSwaps.has(uniqueKey)) {

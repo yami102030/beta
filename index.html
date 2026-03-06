@@ -238,40 +238,42 @@
                   ? getQuarterStr(today) 
                   : getQuarterStr(new Date(today.getFullYear(), today.getMonth() + 3, 1));
 
-              const transformedPeople = membersData.map(m => {
-                  const pRoles = {};
-                  
-                  // 退回至與 Admin 相同的過濾邏輯，不再做嚴格覆寫，確保推薦人數一致
-                  const myPositions = memberPositionsData.filter(mp => 
-                      (mp.quarter === targetQStr || !mp.quarter) && mp.is_active !== false
-                  );
-                  
-                  myPositions.forEach(mp => {
-                      const pos = positionsData.find(p => p.id === mp.position_id);
-                      if (pos) pRoles[pos.name.trim()] = "O";
+              const transformedPeople = membersData
+                  .filter(m => m.name !== 'SYSTEM_CUSTOM_HOLIDAYS_DB') // 核心修正：隱藏系統保留帳號，不列入推薦與同工名單
+                  .map(m => {
+                      const pRoles = {};
+                      
+                      // 退回至與 Admin 相同的過濾邏輯，不再做嚴格覆寫，確保推薦人數一致
+                      const myPositions = memberPositionsData.filter(mp => 
+                          (mp.quarter === targetQStr || !mp.quarter) && mp.is_active !== false
+                      );
+                      
+                      myPositions.forEach(mp => {
+                          const pos = positionsData.find(p => p.id === mp.position_id);
+                          if (pos) pRoles[pos.name.trim()] = "O";
+                      });
+
+                      const qs = (quarterSettingsData || []).find(s => s.member_id === m.id && s.quarter === targetQStr);
+
+                      let unavail = '';
+                      if (qs?.unavailable_dates) {
+                          try { unavail = typeof qs.unavailable_dates === 'string' ? JSON.parse(qs.unavailable_dates).join(',') : qs.unavailable_dates.join(','); } catch(e) { unavail = qs.unavailable_dates; }
+                      } else if (m.unavailable_dates) {
+                          try { unavail = typeof m.unavailable_dates === 'string' ? JSON.parse(m.unavailable_dates).join(',') : m.unavailable_dates.join(','); } catch(e) { unavail = m.unavailable_dates; }
+                      }
+
+                      return {
+                          id: m.id,
+                          name: m.name,
+                          session: qs?.preferred_session || m.preferred_session || '皆可',
+                          unavailable: unavail,
+                          willingness: qs?.availability_status || m.availability_status || '可排班',
+                          groupId: m.group_id || '',
+                          session2: parseInt(qs?.dual_service_pref ?? m.dual_service_pref ?? 0, 10) === 1 ? '二堂同崗' : (parseInt(qs?.dual_service_pref ?? m.dual_service_pref ?? 0, 10) === 2 ? '二堂異崗' : ''),
+                          roles: pRoles,
+                          rawDualPref: parseInt(qs?.dual_service_pref ?? m.dual_service_pref ?? 0, 10) // 保留數值供精準比對
+                      };
                   });
-
-                  const qs = (quarterSettingsData || []).find(s => s.member_id === m.id && s.quarter === targetQStr);
-
-                  let unavail = '';
-                  if (qs?.unavailable_dates) {
-                      try { unavail = typeof qs.unavailable_dates === 'string' ? JSON.parse(qs.unavailable_dates).join(',') : qs.unavailable_dates.join(','); } catch(e) { unavail = qs.unavailable_dates; }
-                  } else if (m.unavailable_dates) {
-                      try { unavail = typeof m.unavailable_dates === 'string' ? JSON.parse(m.unavailable_dates).join(',') : m.unavailable_dates.join(','); } catch(e) { unavail = m.unavailable_dates; }
-                  }
-
-                  return {
-                      id: m.id,
-                      name: m.name,
-                      session: qs?.preferred_session || m.preferred_session || '皆可',
-                      unavailable: unavail,
-                      willingness: qs?.availability_status || m.availability_status || '可排班',
-                      groupId: m.group_id || '',
-                      session2: parseInt(qs?.dual_service_pref ?? m.dual_service_pref ?? 0, 10) === 1 ? '二堂同崗' : (parseInt(qs?.dual_service_pref ?? m.dual_service_pref ?? 0, 10) === 2 ? '二堂異崗' : ''),
-                      roles: pRoles,
-                      rawDualPref: parseInt(qs?.dual_service_pref ?? m.dual_service_pref ?? 0, 10) // 保留數值供精準比對
-                  };
-              });
               setPeopleData(transformedPeople);
               setProgress(70);
 

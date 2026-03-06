@@ -778,7 +778,8 @@
                  Object.entries(s).forEach(([k, v]) => {
                      if (['日期', '堂別'].includes(k)) return;
                      if (v && typeof v === 'string') {
-                         const names = v.split(/,|、|，|\s+/).map(n => n.trim());
+                         // 核心修正：加入斜線 (/) 支援
+                         const names = v.split(/,|、|，|\/|\s+/).map(n => n.trim()).filter(n => n);
                          if (names.includes(person.name)) {
                              mShiftsToday.push({ role: k, session: s['堂別'] });
                          }
@@ -852,7 +853,8 @@
                  Object.entries(row).forEach(([k, v]) => {
                     if(['日期','堂別'].includes(k)) return;
                     if(v && typeof v === 'string') {
-                        const names = v.split(/,|、|，|\s+/).map(n => n.trim());
+                        // 核心修正：加入斜線 (/) 支援
+                        const names = v.split(/,|、|，|\/|\s+/).map(n => n.trim()).filter(n => n);
                         if (names.includes(person.name)) {
                             const shiftRole = k;
                             

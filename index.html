@@ -574,8 +574,8 @@
             setFlatShifts(Array.from(shiftsMap.values()).sort((a, b) => a.dateObj - b.dateObj));
           }, [name, scheduleData, seasonType]); 
 
-          // 恢復為直接開啟 Google Calendar 網頁連結
-          const addToGoogleCalendar = (shift) => {
+          // 核心修正：將原本的 window.open 改成純粹產生網址，交給 <a> 標籤的原生行為處理
+          const getGoogleCalendarUrl = (shift) => {
              const year = shift.dateObj.getFullYear();
              const month = String(shift.dateObj.getMonth() + 1).padStart(2, '0');
              const day = String(shift.dateObj.getDate()).padStart(2, '0');
@@ -599,9 +599,7 @@
              const title = encodeURIComponent(`${shift.role}`);
              const details = encodeURIComponent(`台中浸信會主日服事: ${shift.role}\n堂數: ${shift.session}`);
              
-             const url = `https://www.google.com/calendar/render?action=TEMPLATE&text=${title}&dates=${start}/${end}&details=${details}&ctz=Asia/Taipei`;
-             
-             window.open(url, '_blank', 'noopener,noreferrer');
+             return `https://www.google.com/calendar/render?action=TEMPLATE&text=${title}&dates=${start}/${end}&details=${details}&ctz=Asia/Taipei`;
           };
 
           return (
@@ -685,9 +683,14 @@
                           
                           <div className="flex flex-col gap-2">
                               {seasonType === 'view' && (
-                                <button onClick={() => addToGoogleCalendar(shift)} className="bg-white hover:bg-blue-50 text-blue-600 px-3 py-1.5 rounded-lg transition-all active:scale-95 border border-blue-200 flex-shrink-0 shadow-sm text-xs font-bold text-center whitespace-nowrap">
+                                <a 
+                                    href={getGoogleCalendarUrl(shift)} 
+                                    target="_blank" 
+                                    rel="noopener noreferrer"
+                                    className="bg-white hover:bg-blue-50 text-blue-600 px-3 py-1.5 rounded-lg transition-all active:scale-95 border border-blue-200 flex-shrink-0 shadow-sm text-xs font-bold text-center whitespace-nowrap block"
+                                >
                                     加入行事曆
-                                </button>
+                                </a>
                               )}
                               <button onClick={() => onRequestSwap({ date: shift.date, role: shift.role, session: shift.rawSession, owner: name })} className="bg-white hover:bg-emerald-50 text-emerald-600 px-3 py-1.5 rounded-lg transition-all active:scale-95 border border-emerald-200 flex-shrink-0 shadow-sm text-xs font-bold text-center whitespace-nowrap">
                                 換班查詢

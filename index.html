@@ -243,13 +243,26 @@
                   .map(m => {
                       const pRoles = {};
                       
-                      const myPositions = memberPositionsData.filter(mp => 
-                          (mp.quarter === targetQStr || !mp.quarter) && mp.is_active !== false
-                      );
+                      // 核心修正：加回「季別覆蓋邏輯 (posMap)」。本季暫停的設定會精準覆蓋掉全域開啟的設定
+                      const posMap = new Map();
+                      const allMyPos = memberPositionsData.filter(mp => String(mp.member_id) === String(m.id));
                       
-                      myPositions.forEach(mp => {
-                          const pos = positionsData.find(p => p.id === mp.position_id);
-                          if (pos) pRoles[pos.name.trim()] = "O";
+                      allMyPos.forEach(mp => {
+                          if (!mp.quarter || mp.quarter === targetQStr) {
+                              const existing = posMap.get(mp.position_id);
+                              // 若尚未加入，或這筆是針對目標季別的 (權重最高，覆蓋全域)，則寫入
+                              if (!existing || mp.quarter === targetQStr) {
+                                  posMap.set(mp.position_id, mp);
+                              }
+                          }
+                      });
+                      
+                      posMap.forEach((mp, posId) => {
+                          const isActive = mp.is_active !== false && mp.is_active !== 0 && String(mp.is_active).toLowerCase() !== 'false';
+                          if (isActive) {
+                              const pos = positionsData.find(p => String(p.id) === String(posId));
+                              if (pos) pRoles[pos.name.trim()] = "O";
+                          }
                       });
 
                       const qs = (quarterSettingsData || []).find(s => s.member_id === m.id && s.quarter === targetQStr);
@@ -705,9 +718,17 @@
           const [targetOwner, setTargetOwner] = useState(initialRequest?.owner || name);
           const [candidates, setCandidates] = useState(null);
 
+          // 核心修正 2：加入第二週判斷，供新朋友關懷規則使用
+          const isSecondSunday = (dateObj) => {
+              if (dateObj.getDay() !== 0) return false;
+              const date = dateObj.getDate();
+              return date >= 8 && date <= 14;
+          };
+
           useEffect(() => {
             if (!initialRequest) return;
             const targetDateNorm = normalizeDateStr(initialRequest.date);
+            const targetDateObj = parseDateObj(initialRequest.date);
             const schedulesOnDate = scheduleData.filter(s => normalizeDateStr(s['日期']) === targetDateNorm);
             
             const today = new Date();
@@ -758,8 +779,9 @@
               // 1. 不能推薦原排班者自己
               if (person.name === targetOwner) return;
               
-              // 2. 必須具備該崗位資格
-              if (!person.roles[initialRequest.role]) return;
+              // 2. 核心修正 3：必須具備該崗位資格 (依賴上方已修復的 posMap 機制)
+              const reqRole = (initialRequest.role || '').trim();
+              if (!person.roles[reqRole]) return;
 
               // 3. 服事意願檢查
               const status = (person.willingness || '').trim();
@@ -768,6 +790,11 @@
               // 4. 排除當天請假的同工
               const unavailDates = person.unavailable ? person.unavailable.split(',').map(d => normalizeDateStr(d.trim())) : [];
               if (unavailDates.includes(targetDateNorm)) return;
+
+              // 5. 核心修正 4：新朋友關懷規則 (2 或 3 代表第二週禁排)
+              if ((person.newcomerRule === 2 || person.newcomerRule === 3) && isSecondSunday(targetDateObj)) {
+                  return;
+              }
 
               // 取得候選人當天已經被排的所有班次
               const mShiftsToday = [];
@@ -783,9 +810,9 @@
               });
 
               const reqSession = String(initialRequest.session || '').trim();
-              const activeRole = initialRequest.role;
+              const activeRole = reqRole;
               
-              // 5. 推薦資格邏輯【完全 1:1 對齊 TBC Serve Manager】
+              // 6. 推薦資格邏輯【完全 1:1 對齊 TBC Serve Manager】
               if (activeRole === '執事輪值') {
                   if (mShiftsToday.some(d => d.role === '執事輪值')) return;
               } else {
@@ -812,7 +839,7 @@
                   }
               }
 
-              // 6. 計算雙方可互換的班次 (swapOptions)，但不因為沒有班可換就淘汰這個人
+              // 7. 計算雙方可互換的班次 (swapOptions)
               const swapOptions = [];
               const processedDeaconDates = new Set();
               
@@ -822,7 +849,6 @@
                   const rSession = row['堂別'];
                   const rDateObj = parseDateObj(row['日期']);
                   
-                  // 只抓取未來、且屬於該季的班表，且排除與欲換班同日的日期
                   if (rDateObj < today || getQuarterStr(rDateObj) !== targetQStr || rDate === targetDateNorm) return;
 
                   Object.entries(row).forEach(([k, v]) => {
@@ -836,7 +862,6 @@
               });
 
               candidateShifts.forEach(shift => {
-                  // 原排班者必須有對方崗位的資格才能換
                   if (!requester || !requester.roles[shift.role]) return;
                   
                   if (shift.role === '執事輪值') {
@@ -855,12 +880,16 @@
                   }
               });
 
-              // 將候選人、統計次數、以及可以換的班表選項存入
               potential.push({ ...person, stats: seasonStats[person.name] || 0, swapOptions });
             });
 
-            // 依本季服事次數排序
-            potential.sort((a, b) => a.stats - b.stats);
+            // 核心修正 5：依本季服事次數排序，且 newcomerRule = 1 或 3 (高優先級) 排在最前
+            potential.sort((a, b) => {
+                const isTopA = (a.newcomerRule === 1 || a.newcomerRule === 3) ? -1 : 1;
+                const isTopB = (b.newcomerRule === 1 || b.newcomerRule === 3) ? -1 : 1;
+                if (isTopA !== isTopB) return isTopA - isTopB;
+                return a.stats - b.stats;
+            });
             setCandidates(potential);
           }, [initialRequest, scheduleData, peopleData, seasonType]);
 

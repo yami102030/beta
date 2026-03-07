@@ -705,25 +705,15 @@
           const [targetOwner, setTargetOwner] = useState(initialRequest?.owner || name);
           const [candidates, setCandidates] = useState(null);
 
-          // 輔助函數：判斷某個日期是否為該月的第二個星期日
-          const isSecondSunday = (dateObj) => {
-              // 確保是星期日 (0)
-              if (dateObj.getDay() !== 0) return false;
-              // 第二個星期日的日期必定落在 8 號到 14 號之間
-              const date = dateObj.getDate();
-              return date >= 8 && date <= 14;
-          };
-
           useEffect(() => {
             if (!initialRequest) return;
             const targetDateNorm = normalizeDateStr(initialRequest.date);
-            const targetDateObj = parseDateObj(initialRequest.date); // 取得日期的 Date 物件
             const schedulesOnDate = scheduleData.filter(s => normalizeDateStr(s['日期']) === targetDateNorm);
             
             const today = new Date();
             today.setHours(0, 0, 0, 0);
 
-            // 換班查詢也需要過濾季別
+            // 換班查詢過濾季別
             const targetQStr = seasonType === 'view' 
                 ? getQuarterStr(today) 
                 : getQuarterStr(new Date(today.getFullYear(), today.getMonth() + 3, 1));
@@ -745,7 +735,25 @@
                 }
             });
 
+            // 取得原排班者 (Requester) 的資料與班表，用於比對可互換的班次
+            const requester = peopleData.find(p => p.name === targetOwner);
+            const requesterShifts = [];
+            scheduleData.forEach(row => {
+                const rDate = normalizeDateStr(row['日期']);
+                const rSession = row['堂別'];
+                Object.entries(row).forEach(([k, v]) => {
+                    if (['日期', '堂別'].includes(k)) return;
+                    if (v && typeof v === 'string') {
+                        if (extractNames(v).includes(targetOwner)) {
+                            requesterShifts.push({ date: rDate, session: rSession, role: k });
+                        }
+                    }
+                });
+            });
+
             let potential = [];
+            const compatibleRoles = ['接待', '收奉獻', '主餐', '新朋友關懷'];
+
             peopleData.forEach(person => {
               // 1. 不能推薦原排班者自己
               if (person.name === targetOwner) return;
@@ -761,20 +769,13 @@
               const unavailDates = person.unavailable ? person.unavailable.split(',').map(d => normalizeDateStr(d.trim())) : [];
               if (unavailDates.includes(targetDateNorm)) return;
 
-              // 5. 核心修正：新朋友關懷規則 (newcomer_rule) 檢查
-              // 規則 2 或 3 代表：第二週禁排
-              if ((person.newcomerRule === 2 || person.newcomerRule === 3) && isSecondSunday(targetDateObj)) {
-                  return; // 如果這天是第二個禮拜天，且該同工設定為禁排，則剔除
-              }
-              
               // 取得候選人當天已經被排的所有班次
               const mShiftsToday = [];
               schedulesOnDate.forEach(s => {
                  Object.entries(s).forEach(([k, v]) => {
                      if (['日期', '堂別'].includes(k)) return;
                      if (v && typeof v === 'string') {
-                         const names = extractNames(v);
-                         if (names.includes(person.name)) {
+                         if (extractNames(v).includes(person.name)) {
                              mShiftsToday.push({ role: k, session: s['堂別'] });
                          }
                      }
@@ -784,57 +785,82 @@
               const reqSession = String(initialRequest.session || '').trim();
               const activeRole = initialRequest.role;
               
-              // 6. 推薦資格邏輯【完全 1:1 對齊 TBC Serve Manager 智慧推薦面板】
+              // 5. 推薦資格邏輯【完全 1:1 對齊 TBC Serve Manager】
               if (activeRole === '執事輪值') {
                   if (mShiftsToday.some(d => d.role === '執事輪值')) return;
               } else {
-                  // 1) 同一堂次檢查：預設不能分身，但「四大崗位」允許兼任
                   const shiftsThisSession = mShiftsToday.filter(d => d.session === reqSession);
                   if (shiftsThisSession.length > 0) {
-                      const concurrentRoles = ['接待', '收奉獻', '主餐', '新朋友關懷'];
-                      const allExistingAreConcurrent = shiftsThisSession.every(d => concurrentRoles.includes(d.role));
-                      const isActiveConcurrent = concurrentRoles.includes(activeRole);
-                      
+                      const allExistingAreConcurrent = shiftsThisSession.every(d => compatibleRoles.includes(d.role));
+                      const isActiveConcurrent = compatibleRoles.includes(activeRole);
                       if (!allExistingAreConcurrent || !isActiveConcurrent) return;
                       if (shiftsThisSession.some(d => d.role === activeRole)) return;
                   }
                   
-                  // 2) 檢查今天「另一堂」是否有服事，並比對二堂支援規則
                   const shiftsOtherSession = mShiftsToday.filter(d => d.session !== reqSession);
                   const dualPref = person.rawDualPref || 0; 
                   
                   if (shiftsOtherSession.length > 0) {
-                      if (dualPref === 0) return; // 偏好單堂服事者，不推薦接第二堂
+                      if (dualPref === 0) return; 
                       const otherRoles = shiftsOtherSession.map(d => d.role);
-                      if (dualPref === 1 && !otherRoles.includes(activeRole)) return; // 偏好二堂同崗，但新崗位不同
-                      if (dualPref === 2 && otherRoles.includes(activeRole)) return;  // 偏好二堂異崗，但新崗位相同
+                      if (dualPref === 1 && !otherRoles.includes(activeRole)) return; 
+                      if (dualPref === 2 && otherRoles.includes(activeRole)) return;  
                   } else {
-                      // 3) 當天還沒有跨堂服事時，嚴格檢查堂別偏好
                       if (dualPref === 0 && person.session && person.session !== '皆可') {
                           if (!person.session.includes(reqSession.replace('堂', ''))) return;
                       }
                   }
               }
 
-              // 符合所有資格，加入推薦名單
-              potential.push({ ...person, stats: seasonStats[person.name] || 0 });
+              // 6. 計算雙方可互換的班次 (swapOptions)，但不因為沒有班可換就淘汰這個人
+              const swapOptions = [];
+              const processedDeaconDates = new Set();
+              
+              const candidateShifts = [];
+              scheduleData.forEach(row => {
+                  const rDate = normalizeDateStr(row['日期']);
+                  const rSession = row['堂別'];
+                  const rDateObj = parseDateObj(row['日期']);
+                  
+                  // 只抓取未來、且屬於該季的班表，且排除與欲換班同日的日期
+                  if (rDateObj < today || getQuarterStr(rDateObj) !== targetQStr || rDate === targetDateNorm) return;
+
+                  Object.entries(row).forEach(([k, v]) => {
+                      if (['日期', '堂別'].includes(k)) return;
+                      if (v && typeof v === 'string') {
+                          if (extractNames(v).includes(person.name)) {
+                              candidateShifts.push({ date: rDate, session: rSession, role: k });
+                          }
+                      }
+                  });
+              });
+
+              candidateShifts.forEach(shift => {
+                  // 原排班者必須有對方崗位的資格才能換
+                  if (!requester || !requester.roles[shift.role]) return;
+                  
+                  if (shift.role === '執事輪值') {
+                      if (processedDeaconDates.has(shift.date)) return;
+                      processedDeaconDates.add(shift.date);
+                      
+                      const requesterRolesToday = requesterShifts.filter(s => s.date === shift.date).map(s => s.role);
+                      if (requesterRolesToday.includes('執事輪值')) return;
+                      
+                      swapOptions.push({ date: shift.date, role: '執事輪值', session: '第一堂、第二堂' });
+                  } else {
+                      const requesterRolesThisSession = requesterShifts.filter(s => s.date === shift.date && s.session === shift.session).map(s => s.role);
+                      if (requesterRolesThisSession.includes(shift.role)) return;
+                      
+                      swapOptions.push({ date: shift.date, role: shift.role, session: shift.session });
+                  }
+              });
+
+              // 將候選人、統計次數、以及可以換的班表選項存入
+              potential.push({ ...person, stats: seasonStats[person.name] || 0, swapOptions });
             });
 
-            // 依本季服事次數進行排序
-            // 若要完全對齊 Admin，如果 newcomerRule === 1 或是 3，排序應該要在前面。
-            potential.sort((a, b) => {
-                // 優先檢查 newcomerRule 排序 (1 或 3 代表優先排班)
-                const isTopA = (a.newcomerRule === 1 || a.newcomerRule === 3) ? -1 : 1;
-                const isTopB = (b.newcomerRule === 1 || b.newcomerRule === 3) ? -1 : 1;
-                
-                if (isTopA !== isTopB) {
-                    return isTopA - isTopB; // 讓 1 或 3 的排在前面
-                }
-                
-                // 若優先級相同，則依照本季服事次數由少到多排序
-                return a.stats - b.stats;
-            });
-            
+            // 依本季服事次數排序
+            potential.sort((a, b) => a.stats - b.stats);
             setCandidates(potential);
           }, [initialRequest, scheduleData, peopleData, seasonType]);
 
@@ -897,6 +923,27 @@
                                 </div>
                               </div>
                             </div>
+                            
+                            {/* 恢復顯示：對方可以拿來交換的班表資訊，但移除交換按鈕 */}
+                            {person.swapOptions && person.swapOptions.length > 0 ? (
+                              <div className="mt-4 pt-3 border-t border-slate-50">
+                                <p className="text-[10px] font-bold text-slate-400 mb-2 flex items-center gap-1"><RefreshCw size={10} /> 可以互換的班次：</p>
+                                <div className="flex flex-wrap gap-2">
+                                  {person.swapOptions.map((swap, i) => (
+                                    <div key={i} className="text-xs bg-indigo-50 text-indigo-600 px-3 py-1.5 rounded-lg border border-indigo-100 flex items-center gap-1">
+                                      <span className="font-bold">{swap.date}</span>
+                                      <span className="text-[10px] opacity-70">({swap.role} • {swap.session})</span>
+                                    </div>
+                                  ))}
+                                </div>
+                              </div>
+                            ) : (
+                              <div className="mt-4 pt-3 border-t border-slate-50">
+                                <p className="text-[10px] font-bold text-slate-400 flex items-center gap-1">
+                                    <Info size={10} /> 無班可換，可請求支援
+                                </p>
+                              </div>
+                            )}
                           </div>
                       ))
                     ) : (

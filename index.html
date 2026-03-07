@@ -718,7 +718,6 @@
           const [targetOwner, setTargetOwner] = useState(initialRequest?.owner || name);
           const [candidates, setCandidates] = useState(null);
 
-          // 核心修正 2：加入第二週判斷，供新朋友關懷規則使用
           const isSecondSunday = (dateObj) => {
               if (dateObj.getDay() !== 0) return false;
               const date = dateObj.getDate();
@@ -734,12 +733,10 @@
             const today = new Date();
             today.setHours(0, 0, 0, 0);
 
-            // 換班查詢過濾季別
             const targetQStr = seasonType === 'view' 
                 ? getQuarterStr(today) 
                 : getQuarterStr(new Date(today.getFullYear(), today.getMonth() + 3, 1));
 
-            // 僅計算「當前季別」的服事次數
             const seasonStats = {};
             scheduleData.forEach(row => {
                 const rDateObj = parseDateObj(row['日期']);
@@ -756,7 +753,7 @@
                 }
             });
 
-            // 取得原排班者 (Requester) 的資料與班表，用於比對可互換的班次
+            // 取得原排班者 (Requester) 的資料與班表
             const requester = peopleData.find(p => p.name === targetOwner);
             const requesterShifts = [];
             scheduleData.forEach(row => {
@@ -779,7 +776,7 @@
               // 1. 不能推薦原排班者自己
               if (person.name === targetOwner) return;
               
-              // 2. 核心修正 3：必須具備該崗位資格 (依賴上方已修復的 posMap 機制)
+              // 2. 必須具備該崗位資格
               const reqRole = (initialRequest.role || '').trim();
               if (!person.roles[reqRole]) return;
 
@@ -791,7 +788,7 @@
               const unavailDates = person.unavailable ? person.unavailable.split(',').map(d => normalizeDateStr(d.trim())) : [];
               if (unavailDates.includes(targetDateNorm)) return;
 
-              // 5. 核心修正 4：新朋友關懷規則 (2 或 3 代表第二週禁排)
+              // 5. 新朋友關懷規則 (第二週禁排)
               if ((person.newcomerRule === 2 || person.newcomerRule === 3) && isSecondSunday(targetDateObj)) {
                   return;
               }
@@ -849,7 +846,8 @@
                   const rSession = row['堂別'];
                   const rDateObj = parseDateObj(row['日期']);
                   
-                  if (rDateObj < today || getQuarterStr(rDateObj) !== targetQStr || rDate === targetDateNorm) return;
+                  // 移除 rDate === targetDateNorm 的限制，允許同日跨堂換班 (對齊 Admin 引擎)
+                  if (rDateObj < today || getQuarterStr(rDateObj) !== targetQStr) return;
 
                   Object.entries(row).forEach(([k, v]) => {
                       if (['日期', '堂別'].includes(k)) return;
@@ -880,16 +878,15 @@
                   }
               });
 
+              // 將可互換的班次依日期排序
+              swapOptions.sort((a, b) => parseDateObj(a.date) - parseDateObj(b.date));
+
               potential.push({ ...person, stats: seasonStats[person.name] || 0, swapOptions });
             });
 
-            // 核心修正 5：依本季服事次數排序，且 newcomerRule = 1 或 3 (高優先級) 排在最前
-            potential.sort((a, b) => {
-                const isTopA = (a.newcomerRule === 1 || a.newcomerRule === 3) ? -1 : 1;
-                const isTopB = (b.newcomerRule === 1 || b.newcomerRule === 3) ? -1 : 1;
-                if (isTopA !== isTopB) return isTopA - isTopB;
-                return a.stats - b.stats;
-            });
+            // 修正：嚴格按照「本季服事次數 (stats)」由少到多排序
+            potential.sort((a, b) => a.stats - b.stats);
+            
             setCandidates(potential);
           }, [initialRequest, scheduleData, peopleData, seasonType]);
 
@@ -931,8 +928,19 @@
                               <div className="flex items-center gap-4">
                                 <div className={`w-10 h-10 rounded-full flex items-center justify-center font-black text-white shadow-md ${idx < 3 ? 'bg-emerald-500' : 'bg-slate-300'}`}>{idx + 1}</div>
                                 <div>
-                                  <div className="flex items-center gap-2">
+                                  <div className="flex items-center gap-2 flex-wrap">
                                     <p className="text-xl font-black text-slate-800">{person.name}</p>
+                                    
+                                    {/* 狀態標籤 */}
+                                    {person.swapOptions && person.swapOptions.length > 0 ? (
+                                        <div className="flex items-center gap-1 bg-white text-indigo-600 border border-indigo-200 px-2 py-1 rounded-md text-[10px] font-bold shadow-sm">
+                                            <RefreshCw size={10} /> 換班
+                                        </div>
+                                    ) : (
+                                        <div className="flex items-center gap-1 bg-white text-orange-600 border border-orange-200 px-2 py-1 rounded-md text-[10px] font-bold shadow-sm">
+                                            <HandHeart size={10} /> 替補
+                                        </div>
+                                    )}
                                   </div>
                                   <div className="flex items-center gap-1 text-xs font-bold text-slate-400 mt-1 flex-wrap">
                                     <span className="bg-slate-100 px-1.5 py-0.5 rounded">{person.session}</span>
@@ -953,17 +961,22 @@
                               </div>
                             </div>
                             
-                            {/* 恢復顯示：對方可以拿來交換的班表資訊，但移除交換按鈕 */}
+                            {/* 對方可以拿來交換的班表資訊 */}
                             {person.swapOptions && person.swapOptions.length > 0 ? (
                               <div className="mt-4 pt-3 border-t border-slate-50">
-                                <p className="text-[10px] font-bold text-slate-400 mb-2 flex items-center gap-1"><RefreshCw size={10} /> 可以互換的班次：</p>
+                                <p className="text-[10px] font-bold text-slate-400 mb-2 flex items-center gap-1"><RefreshCw size={10} /> 雙方可以互換的班次：</p>
                                 <div className="flex flex-wrap gap-2">
-                                  {person.swapOptions.map((swap, i) => (
-                                    <div key={i} className="text-xs bg-indigo-50 text-indigo-600 px-3 py-1.5 rounded-lg border border-indigo-100 flex items-center gap-1">
-                                      <span className="font-bold">{swap.date}</span>
-                                      <span className="text-[10px] opacity-70">({swap.role} • {swap.session})</span>
-                                    </div>
-                                  ))}
+                                  {person.swapOptions.map((swap, i) => {
+                                      // 將 2026/4/5 轉為 2026-04-05 格式，完美對齊要求
+                                      const parts = swap.date.split('/');
+                                      const formattedDate = parts.length === 3 ? `${parts[0]}-${parts[1].padStart(2, '0')}-${parts[2].padStart(2, '0')}` : swap.date;
+                                      return (
+                                        <div key={i} className="text-xs bg-indigo-50 text-indigo-600 px-3 py-1.5 rounded-lg border border-indigo-100 flex items-center">
+                                          <span className="font-bold">{formattedDate}</span>
+                                          <span className="text-[10px] opacity-70">({swap.role} • {swap.session})</span>
+                                        </div>
+                                      );
+                                  })}
                                 </div>
                               </div>
                             ) : (

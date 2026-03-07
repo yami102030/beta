@@ -239,11 +239,10 @@
                   : getQuarterStr(new Date(today.getFullYear(), today.getMonth() + 3, 1));
 
               const transformedPeople = membersData
-                  .filter(m => m.name !== 'SYSTEM_CUSTOM_HOLIDAYS_DB') // 核心修正：隱藏系統保留帳號，不列入推薦與同工名單
+                  .filter(m => m.name !== 'SYSTEM_CUSTOM_HOLIDAYS_DB') 
                   .map(m => {
                       const pRoles = {};
                       
-                      // 退回至與 Admin 相同的過濾邏輯，不再做嚴格覆寫，確保推薦人數一致
                       const myPositions = memberPositionsData.filter(mp => 
                           (mp.quarter === targetQStr || !mp.quarter) && mp.is_active !== false
                       );
@@ -271,7 +270,9 @@
                           groupId: m.group_id || '',
                           session2: parseInt(qs?.dual_service_pref ?? m.dual_service_pref ?? 0, 10) === 1 ? '二堂同崗' : (parseInt(qs?.dual_service_pref ?? m.dual_service_pref ?? 0, 10) === 2 ? '二堂異崗' : ''),
                           roles: pRoles,
-                          rawDualPref: parseInt(qs?.dual_service_pref ?? m.dual_service_pref ?? 0, 10) // 保留數值供精準比對
+                          rawDualPref: parseInt(qs?.dual_service_pref ?? m.dual_service_pref ?? 0, 10),
+                          // 新增：提取 newcomer_rule，優先使用季別設定
+                          newcomerRule: qs?.newcomer_rule ?? m.newcomer_rule ?? null 
                       };
                   });
               setPeopleData(transformedPeople);
@@ -704,9 +705,19 @@
           const [targetOwner, setTargetOwner] = useState(initialRequest?.owner || name);
           const [candidates, setCandidates] = useState(null);
 
+          // 輔助函數：判斷某個日期是否為該月的第二個星期日
+          const isSecondSunday = (dateObj) => {
+              // 確保是星期日 (0)
+              if (dateObj.getDay() !== 0) return false;
+              // 第二個星期日的日期必定落在 8 號到 14 號之間
+              const date = dateObj.getDate();
+              return date >= 8 && date <= 14;
+          };
+
           useEffect(() => {
             if (!initialRequest) return;
             const targetDateNorm = normalizeDateStr(initialRequest.date);
+            const targetDateObj = parseDateObj(initialRequest.date); // 取得日期的 Date 物件
             const schedulesOnDate = scheduleData.filter(s => normalizeDateStr(s['日期']) === targetDateNorm);
             
             const today = new Date();
@@ -736,21 +747,27 @@
 
             let potential = [];
             peopleData.forEach(person => {
-              // 1. 不能推薦原排班者自己 (對應 Admin: m.id === member_id return false)
+              // 1. 不能推薦原排班者自己
               if (person.name === targetOwner) return;
               
-              // 2. 必須具備該崗位資格 (對應 Admin: eligibleIds.includes)
+              // 2. 必須具備該崗位資格
               if (!person.roles[initialRequest.role]) return;
 
-              // 3. 服事意願檢查 (完全對齊 Admin)
+              // 3. 服事意願檢查
               const status = (person.willingness || '').trim();
               if (status === '暫停服事' || status === '安息季') return;
 
-              // 4. 排除當天請假的同工 (完全對齊 Admin 的 unavailable_dates 檢查)
+              // 4. 排除當天請假的同工
               const unavailDates = person.unavailable ? person.unavailable.split(',').map(d => normalizeDateStr(d.trim())) : [];
               if (unavailDates.includes(targetDateNorm)) return;
+
+              // 5. 核心修正：新朋友關懷規則 (newcomer_rule) 檢查
+              // 規則 2 或 3 代表：第二週禁排
+              if ((person.newcomerRule === 2 || person.newcomerRule === 3) && isSecondSunday(targetDateObj)) {
+                  return; // 如果這天是第二個禮拜天，且該同工設定為禁排，則剔除
+              }
               
-              // 取得候選人當天已經被排的所有班次 (對應 Admin 的 mShiftsToday)
+              // 取得候選人當天已經被排的所有班次
               const mShiftsToday = [];
               schedulesOnDate.forEach(s => {
                  Object.entries(s).forEach(([k, v]) => {
@@ -767,7 +784,7 @@
               const reqSession = String(initialRequest.session || '').trim();
               const activeRole = initialRequest.role;
               
-              // 5. 推薦資格邏輯【完全 1:1 對齊 TBC Serve Manager 智慧推薦面板】
+              // 6. 推薦資格邏輯【完全 1:1 對齊 TBC Serve Manager 智慧推薦面板】
               if (activeRole === '執事輪值') {
                   if (mShiftsToday.some(d => d.role === '執事輪值')) return;
               } else {
@@ -804,7 +821,20 @@
             });
 
             // 依本季服事次數進行排序
-            potential.sort((a, b) => a.stats - b.stats);
+            // 若要完全對齊 Admin，如果 newcomerRule === 1 或是 3，排序應該要在前面。
+            potential.sort((a, b) => {
+                // 優先檢查 newcomerRule 排序 (1 或 3 代表優先排班)
+                const isTopA = (a.newcomerRule === 1 || a.newcomerRule === 3) ? -1 : 1;
+                const isTopB = (b.newcomerRule === 1 || b.newcomerRule === 3) ? -1 : 1;
+                
+                if (isTopA !== isTopB) {
+                    return isTopA - isTopB; // 讓 1 或 3 的排在前面
+                }
+                
+                // 若優先級相同，則依照本季服事次數由少到多排序
+                return a.stats - b.stats;
+            });
+            
             setCandidates(potential);
           }, [initialRequest, scheduleData, peopleData, seasonType]);
 

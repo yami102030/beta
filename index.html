@@ -736,20 +736,21 @@
 
             let potential = [];
             peopleData.forEach(person => {
+              // 1. 不能推薦原排班者自己 (對應 Admin: m.id === member_id return false)
               if (person.name === targetOwner) return;
               
-              // 1. 服事意願檢查 (完全對齊 Admin)
-              const status = (person.willingness || '').trim();
-              if (status === '暫停服事' || status === '安息季') return;
-              
-              // 2. 崗位資格檢查
+              // 2. 必須具備該崗位資格 (對應 Admin: eligibleIds.includes)
               if (!person.roles[initialRequest.role]) return;
 
-              // 3. 排除當天請假的同工
+              // 3. 服事意願檢查 (完全對齊 Admin)
+              const status = (person.willingness || '').trim();
+              if (status === '暫停服事' || status === '安息季') return;
+
+              // 4. 排除當天請假的同工 (完全對齊 Admin 的 unavailable_dates 檢查)
               const unavailDates = person.unavailable ? person.unavailable.split(',').map(d => normalizeDateStr(d.trim())) : [];
               if (unavailDates.includes(targetDateNorm)) return;
               
-              // 取得候選人當天已經被排的所有班次
+              // 取得候選人當天已經被排的所有班次 (對應 Admin 的 mShiftsToday)
               const mShiftsToday = [];
               schedulesOnDate.forEach(s => {
                  Object.entries(s).forEach(([k, v]) => {
@@ -766,10 +767,11 @@
               const reqSession = String(initialRequest.session || '').trim();
               const activeRole = initialRequest.role;
               
-              // 4. 推薦資格邏輯【完全 1:1 對齊 TBC Serve Manager 智慧推薦面板】
+              // 5. 推薦資格邏輯【完全 1:1 對齊 TBC Serve Manager 智慧推薦面板】
               if (activeRole === '執事輪值') {
                   if (mShiftsToday.some(d => d.role === '執事輪值')) return;
               } else {
+                  // 1) 同一堂次檢查：預設不能分身，但「四大崗位」允許兼任
                   const shiftsThisSession = mShiftsToday.filter(d => d.session === reqSession);
                   if (shiftsThisSession.length > 0) {
                       const concurrentRoles = ['接待', '收奉獻', '主餐', '新朋友關懷'];
@@ -780,15 +782,17 @@
                       if (shiftsThisSession.some(d => d.role === activeRole)) return;
                   }
                   
+                  // 2) 檢查今天「另一堂」是否有服事，並比對二堂支援規則
                   const shiftsOtherSession = mShiftsToday.filter(d => d.session !== reqSession);
-                  const dualPref = person.rawDualPref || 0; // 取得原始數字型態的二堂支援設定
+                  const dualPref = person.rawDualPref || 0; 
                   
                   if (shiftsOtherSession.length > 0) {
-                      if (dualPref === 0) return;
+                      if (dualPref === 0) return; // 偏好單堂服事者，不推薦接第二堂
                       const otherRoles = shiftsOtherSession.map(d => d.role);
-                      if (dualPref === 1 && !otherRoles.includes(activeRole)) return;
-                      if (dualPref === 2 && otherRoles.includes(activeRole)) return;
+                      if (dualPref === 1 && !otherRoles.includes(activeRole)) return; // 偏好二堂同崗，但新崗位不同
+                      if (dualPref === 2 && otherRoles.includes(activeRole)) return;  // 偏好二堂異崗，但新崗位相同
                   } else {
+                      // 3) 當天還沒有跨堂服事時，嚴格檢查堂別偏好
                       if (dualPref === 0 && person.session && person.session !== '皆可') {
                           if (!person.session.includes(reqSession.replace('堂', ''))) return;
                       }
@@ -799,6 +803,7 @@
               potential.push({ ...person, stats: seasonStats[person.name] || 0 });
             });
 
+            // 依本季服事次數進行排序
             potential.sort((a, b) => a.stats - b.stats);
             setCandidates(potential);
           }, [initialRequest, scheduleData, peopleData, seasonType]);
